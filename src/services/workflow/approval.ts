@@ -6,6 +6,7 @@ import {
   type PublishResult,
 } from "@/contracts/artifacts";
 import type { Prisma } from "@prisma/client";
+import { parseLooseJson } from "@/lib/json-extract";
 import { nextStatus, type WorkflowStatus } from "@/domain/state-machine";
 import { NotFoundError } from "@/services/companies";
 import { getAgentRuntime } from "@/services/workflow/orchestrator";
@@ -101,10 +102,10 @@ export async function decideApproval(
 
     let parsed: PublishResult | null = null;
     if (result.status === "done" && result.outputText) {
-      try {
-        parsed = publishResultSchema.parse(JSON.parse(result.outputText));
-      } catch {
-        parsed = null;
+      const json = parseLooseJson(result.outputText);
+      if (json != null) {
+        const candidate = publishResultSchema.safeParse(json);
+        parsed = candidate.success ? candidate.data : null;
       }
     }
     if (!parsed) {

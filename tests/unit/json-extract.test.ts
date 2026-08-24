@@ -26,6 +26,35 @@ describe("loose json extraction", () => {
     });
   });
 
+  it("recovers when a model emits a doubled opening brace (nemotron-style)", () => {
+    const broken = [
+      "{",
+      "{",
+      '  "topic": "AI infrastructure cost optimization",',
+      "  \"keyPoints\": [",
+      '      "Idle credits are a measurable leakage point"',
+      "    ],",
+      '  "sources": [',
+      "      {",
+      '        "title": "Report",',
+      '        "url": "https://example.com/report",',
+      '        "claimsSupported": ["22% waste"]',
+      "      }",
+      "    ]",
+      "}",
+    ].join("\n");
+    const parsed = parseLooseJson(broken) as { topic?: string; sources?: unknown[] };
+    expect(parsed.topic).toBe("AI infrastructure cost optimization");
+    expect(parsed.sources).toHaveLength(1);
+  });
+
+  it("prefers the longest parseable candidate over smaller fragments", () => {
+    // Two independent objects in noise; the meaningful larger one must win.
+    const text = 'prefix {"small":true} noise {"big":{"nested":{"deep":{"k":1}}}}';
+    const parsed = parseLooseJson(text) as { big?: { nested?: { deep?: { k?: number } } } };
+    expect(parsed?.big?.nested?.deep?.k).toBe(1);
+  });
+
   it("returns null for prose-only or broken payloads", () => {
     expect(parseLooseJson("no object here")).toBeNull();
     expect(parseLooseJson("{ broken")).toBeNull();
