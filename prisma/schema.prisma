@@ -27,5 +27,27 @@ model Company {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
+  campaigns Campaign[]
+
   @@map("companies")
+}
+
+// SQLite has no native enums; status values are validated by Zod in the
+// service layer (see src/contracts/campaign.ts).
+model Campaign {
+  id             String   @id @default(cuid())
+  companyId      String
+  name           String
+  description    String?
+  goal           String?
+  targetAudience String?
+  topics         Json
+  status         String   @default("DRAFT")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("campaigns")
 }
