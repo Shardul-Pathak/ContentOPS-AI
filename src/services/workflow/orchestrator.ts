@@ -18,6 +18,7 @@ import { companyContextInputSchema } from "@/contracts/company-context";
 import { NotFoundError } from "@/services/companies";
 import { MAX_REVISIONS, isTerminal, nextStatus, type WorkflowStatus } from "@/domain/state-machine";
 import { Prisma } from "@prisma/client";
+import { parseLooseJson, truncateForLog } from "@/lib/json-extract";
 import { prisma } from "@/lib/db";
 import {
   MockAgentRuntime,
@@ -82,14 +83,13 @@ interface ZodLike {
     | { success: false; error: unknown };
 }
 
+// Tolerant of markdown fences / surrounding prose before schema validation.
 function zodOutputParser(schema: ZodLike): (text: string) => unknown {
   return (text) => {
-    try {
-      const parsed = schema.safeParse(JSON.parse(text));
-      return parsed.success ? parsed.data : null;
-    } catch {
-      return null;
-    }
+    const json = parseLooseJson(text);
+    if (json == null) return null;
+    const parsed = schema.safeParse(json);
+    return parsed.success ? parsed.data : null;
   };
 }
 
@@ -103,7 +103,6 @@ async function runStage<A>(
   role: AgentRole,
   statusDuringStage: WorkflowStatus,
   prompt: string,
-  validateOutput: (text: string) => A | null,
 ): Promise<StageOutcome<A>> {
   const { contentId, runtime } = ctx;
 
@@ -149,12 +148,14 @@ async function runStage<A>(
     }
 
     const artifact =
-      result.status === "done" ? validateOutput(result.outputText ?? "") : undefined;
+      result.status === "done" ? (parseArtifact(role, result.outputText) as A | null) : null;
 
     if (!artifact) {
-      throw new WorkflowError(
-        `Agent ${role} did not produce a valid result: ${result.errorMessage ?? "unparseable output"}`,
-      );
+      const detail =
+        result.status !== "done"
+          ? (result.errorMessage ?? "harness error")
+          : `output was not valid JSON for the ${role} contract after one corrective retry — began with: "${truncateForLog(result.outputText ?? "")}"`;
+      throw new WorkflowError(`Agent ${role} did not produce a valid result: ${detail}`);
     }
 
     await prisma.agentRun.update({
@@ -277,7 +278,6 @@ export async function runWorkflow(
         `Topic: ${content.topic}`,
         "Use your search tools to find credible sources. Preserve exact URLs and publishers. Return ONLY JSON matching the required schema.",
       ].join("\n\n"),
-      (t) => researchResultSchema.parse(JSON.parse(t)) as ResearchResult,
     );
     await prisma.content.update({
       where: { id: contentId },
@@ -325,7 +325,6 @@ export async function runWorkflow(
         `Value propositions: ${(company.marketing as { valuePropositions?: string[] } | null)?.valuePropositions?.join("; ") ?? "none provided"}`,
         `Research:\n${JSON.stringify(researchOutcome.artifact)}`,
       ].join("\n\n"),
-      (t) => contentStrategySchema.parse(JSON.parse(t)) as ContentStrategy,
     );
     await prisma.content.update({
       where: { id: contentId },
@@ -370,7 +369,6 @@ export async function runWorkflow(
           "Write the article now. Return ONLY JSON matching the required schema.",
           `Input:\n${JSON.stringify(writerInput)}`,
         ].join("\n\n"),
-        (t): ArticleDraft => articleDraftSchema.parse(JSON.parse(t)) as ArticleDraft,
       );
       const draft = writeResult.artifact;
       lastDraft = draft;
@@ -396,7 +394,6 @@ export async function runWorkflow(
           `Strategy: ${JSON.stringify(strategyOutcome.artifact)}`,
           `Draft:\n${JSON.stringify(draft)}`,
         ].join("\n\n"),
-        (t) => parseQualityReviewOutput(t),
       );
       const review = reviewResult.artifact;
       await prisma.content.update({
@@ -450,7 +447,6 @@ export async function runWorkflow(
         `Brand notes: ${JSON.stringify(company.brand)}`,
         `Article title: ${lastDraft?.title ?? content.topic}\nTopic: ${content.topic}\nOpening excerpt: ${(lastDraft?.content ?? "").slice(0, 400)}`,
       ].join("\n\n"),
-      (t) => assetSetSchema.parse(JSON.parse(t)) as AssetSet,
     );
     await prisma.asset.deleteMany({ where: { contentId } });
     if (assetsOutcome.artifact.assets.length > 0) {

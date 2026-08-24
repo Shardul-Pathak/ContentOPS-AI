@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll, beforeEach } from "vitest";
 import { createCompany } from "@/services/companies";
 import { createCampaign } from "@/services/campaigns";
 import { runWorkflow } from "@/services/workflow/orchestrator";
-import { MockAgentRuntime, type MockScriptEntry } from "@/lib/agent-runtime";
+import { MockAgentRuntime, fixtureOutput, type MockScriptEntry } from "@/lib/agent-runtime";
 import { prisma } from "@/lib/db";
 
 let campaignId: string;
@@ -159,6 +159,42 @@ describe("workflow orchestration (mock runtime)", () => {
 
     const failedRuns = content.agentRuns.filter((r) => r.status === "FAILED");
     expect(failedRuns.length).toBe(0); // retry succeeded within the same stage
+  });
+
+  it("tolerates markdown-fenced research output without burning the retry", async () => {
+    const fixture = JSON.stringify(fixtureOutput("research"));
+    const runtime = new MockAgentRuntime((role) =>
+      role === "research"
+        ? { overrideOutputText: () => "```json\n" + fixture + "\n```" }
+        : {},
+    );
+
+    const contentId = await startTestContent("Fenced output topic");
+    const content = await runToCompletion(contentId, runtime);
+    expect(content.status).toBe("AWAITING_APPROVAL");
+
+    // Fences are stripped transparently — no corrective-retry turn happened.
+    const failedRuns = content.agentRuns.filter((r) => r.status === "FAILED");
+    expect(failedRuns.length).toBe(0);
+  });
+
+  it("reports a friendly error (not a raw parser message) when output stays invalid", async () => {
+    const runtime = new MockAgentRuntime((role) =>
+      role === "research"
+        ? { overrideOutputText: () => "I could not produce valid JSON, sorry." }
+        : {},
+    );
+
+    const contentId = await startTestContent("Invalid forever");
+    try {
+      await runWorkflow(contentId, runtime);
+    } catch {
+      /* persisted */
+    }
+    const after = await prisma.content.findUniqueOrThrow({ where: { id: contentId } });
+    expect(after.status).toBe("FAILED");
+    expect(after.failureReason).toContain("was not valid JSON for the research contract after one corrective retry");
+    expect(after.failureReason).not.toContain("position 2");
   });
 
   it("records a FAILED agent run when the provider errors", async () => {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { parseLooseJson } from "@/lib/json-extract";
 
 // Agent output contracts per AGENTS.md sections 10-15. Every agent's final
 // answer must parse against its schema before anything is persisted or passed
@@ -119,17 +120,12 @@ export type AssetSet = z.infer<typeof assetSetSchema>;
  * the bare PASS/FAIL object used by fixtures and older runs.
  */
 export function parseQualityReviewOutput(text: string): QualityReview | null {
-  try {
-    const json: unknown = JSON.parse(text);
-    const candidate =
-      json != null && typeof json === "object" && "review" in json
-        ? (json as { review: unknown }).review
-        : json;
-    const parsed = qualityReviewSchema.safeParse(candidate);
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
+  const json = parseLooseJson(text);
+  if (json == null || typeof json !== "object") return null;
+  const candidate =
+    "review" in json ? (json as { review: unknown }).review : json;
+  const parsed = qualityReviewSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
 }
 export type PublishPayload = z.infer<typeof publishPayloadSchema>;
 export type PublishResult = z.infer<typeof publishResultSchema>;
