@@ -24,6 +24,12 @@ d6b7925 F3 foundation · e0cc171 F4 · bf6defc F5 · 7dda5af F6 · 7abdb31 F7 ·
 ## Running the demo
 See README "Demo walkthrough". Prereqs: .env from example; trueforge mode needs model key + running TF server + seed.
 
+## Live-Mode Status (end of day)
+- Infra fixes all merged: env loading, FQN derivation, output-token cap (8192), brace-tolerant JSON, evidence + tool-use gates, live activity streaming
+- OpenRouter/Nemotron free tier registered OK; agents seeded with preloaded exa tools
+- BLOCKER: nemotron-3-super-120b-a12b:free makes ZERO tool calls through OpenRouter routing even with schemas preloaded — returns empty research. Gates correctly fail-fast now.
+- Next: try MODEL_UPSTREAM_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free or paid nvidia/nemotron-3.5-lightning (~$0.0003/run), reseed, rerun. Or demo tonight with AGENT_PROVIDER=mock.
+
 ## Known Issues / Future Work
 - Live-server smoke against real TrueForge still pending (needs model API key in env): verify json_schema behavior of the chosen endpoint (fallback RESPONSE_FORMAT_MODE=json_object) and MCP catalog contents
 - ESLint via FlatCompat bridge; npm 12 install-scripts approval note in F0 commit
