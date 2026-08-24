@@ -14,6 +14,7 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
         agentRuns: { orderBy: { startedAt: "asc" } },
         campaign: true,
         assetRows: true,
+        approvals: { orderBy: { createdAt: "desc" } },
       },
     });
     if (!content) throw new NotFoundError("Content not found");

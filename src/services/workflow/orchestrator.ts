@@ -3,11 +3,13 @@ import {
   articleDraftSchema,
   assetSetSchema,
   contentStrategySchema,
+  publishPayloadSchema,
   qualityReviewSchema,
   researchResultSchema,
   type ArticleDraft,
   type AssetSet,
   type ContentStrategy,
+  type PublishPayload,
   type QualityReview,
   type ResearchResult,
 } from "@/contracts/artifacts";
@@ -66,6 +68,7 @@ const validators: Partial<Record<AgentRole, (text: string) => unknown>> = {
   writer: zodOutputParser(articleDraftSchema),
   quality: zodOutputParser(qualityReviewSchema),
   image: zodOutputParser(assetSetSchema),
+  publisher: zodOutputParser(publishPayloadSchema),
 };
 
 interface ZodLike {
@@ -419,9 +422,32 @@ export async function runWorkflow(
       });
     }
 
+    // --- PUBLICATION PREPARATION + APPROVAL GATE -----------------------------
+    // The workflow stops here by design: an external action may only execute
+    // after an explicit human approval recorded on the pending row (§17).
+    await setStatus(contentId, "AWAITING_APPROVAL", "publisher");
+    const assets = await prisma.asset.findMany({ where: { contentId } });
+    const prepareOutcome = await runStage<PublishPayload>(
+      ctx,
+      "publisher",
+      "AWAITING_APPROVAL",
+      [
+        "PREPARE the publication payload for the approved article. Do NOT publish — preparation only. Return ONLY JSON matching the required schema.",
+        `Destination: configured company blog endpoint`,
+        `Article title: ${lastDraft?.title ?? content.topic}\nSlug: ${lastDraft?.slug ?? ""}\nMeta description: ${lastDraft?.metaDescription ?? ""}`,
+        `Assets prepared: ${assets.length}`,
+      ].join("\n\n"),
+      (t): PublishPayload => publishPayloadSchema.parse(JSON.parse(t)) as PublishPayload,
+    );
+    await prisma.approval.create({
+      data: {
+        contentId,
+        status: "PENDING",
+        destination: prepareOutcome.artifact.destination,
+        payloadSummary: asJson(prepareOutcome.artifact),
+      },
+    });
     await setStatus(contentId, "AWAITING_APPROVAL", null);
-    // Publishing arrives with the approval gate milestone: the pipeline
-    // stops here by design until an explicit human approval exists.
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const existing = await prisma.content.findUnique({ where: { id: contentId } });

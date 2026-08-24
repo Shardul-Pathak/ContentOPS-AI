@@ -30,7 +30,21 @@ type ContentState = {
     cta?: string;
   } | null;
   qualityReview: { status?: string; score?: number; issues?: { severity: string; description: string }[] } | null;
+  publishedUrl: string | null;
   assets: { id: string; type: string; url: string; altText: string; description: string }[];
+  approvals: {
+    id: string;
+    status: string;
+    destination: string;
+    payloadSummary: {
+      title?: string;
+      slug?: string;
+      metaDescription?: string;
+      assetCount?: number;
+      externalAction?: string;
+      destination?: string;
+    };
+  }[];
   campaignId: string;
   agentRuns: AgentRun[];
 };
@@ -58,6 +72,8 @@ export default function ContentPage() {
   const id = params.id;
   const [content, setContent] = useState<ContentState | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [deciding, setDeciding] = useState(false);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/contents/${id}`);
@@ -88,6 +104,27 @@ export default function ContentPage() {
     };
   }, [load]);
 
+  async function decide(decision: "approve" | "reject") {
+    if (!content) return;
+    setDecisionError(null);
+    setDeciding(true);
+    try {
+      const res = await fetch(`/api/contents/${content.id}/approval`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({ error: res.statusText }));
+        setDecisionError(b.error ?? `Request failed (${res.status})`);
+        return;
+      }
+      await load();
+    } finally {
+      setDeciding(false);
+    }
+  }
+
   if (notFound) {
     return (
       <main className="mx-auto max-w-3xl p-8">
@@ -105,6 +142,8 @@ export default function ContentPage() {
     content.currentAgent == null && TERMINAL_OR_WAITING.has(content.status)
       ? -1
       : STATUS_STEPS.indexOf(content.status);
+
+  const pendingApproval = content.approvals.find((a) => a.status === "PENDING");
 
   return (
     <main className="mx-auto max-w-3xl p-8">
@@ -149,12 +188,80 @@ export default function ContentPage() {
             {content.failureReason}
           </p>
         )}
-        {content.status === "AWAITING_APPROVAL" && (
+        {content.status === "AWAITING_APPROVAL" && !pendingApproval && (
           <p className="mt-3 rounded-md border border-amber-800 bg-amber-950/30 p-3 text-sm text-amber-300">
-            Awaiting approval. Publishing controls arrive with the approval gate milestone.
+            Awaiting approval…
           </p>
         )}
       </section>
+
+      {/* Human approval gate */}
+      {content.status === "AWAITING_APPROVAL" && pendingApproval && (
+        <section className="mt-6 rounded-lg border border-amber-700 bg-amber-950/10 p-5">
+          <h2 className="text-lg font-medium text-amber-300">Approval required</h2>
+          <p className="mt-1 text-sm text-neutral-300">
+            The system wants to publish this article. Review the exact action before deciding.
+          </p>
+          <dl className="mt-3 space-y-1 rounded-md border border-neutral-800 bg-neutral-950/60 p-4 text-sm">
+            <div className="flex gap-2">
+              <dt className="w-32 shrink-0 text-neutral-500">Destination</dt>
+              <dd className="font-mono">{pendingApproval.destination}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="w-32 shrink-0 text-neutral-500">Article</dt>
+              <dd>{pendingApproval.payloadSummary.title}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="w-32 shrink-0 text-neutral-500">Slug</dt>
+              <dd className="font-mono">{pendingApproval.payloadSummary.slug}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="w-32 shrink-0 text-neutral-500">Meta</dt>
+              <dd>{pendingApproval.payloadSummary.metaDescription}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="w-32 shrink-0 text-neutral-500">Assets</dt>
+              <dd>{pendingApproval.payloadSummary.assetCount} prepared</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="w-32 shrink-0 text-neutral-500">Action</dt>
+              <dd>{pendingApproval.payloadSummary.externalAction}</dd>
+            </div>
+          </dl>
+
+          {decisionError && (
+            <p className="mt-3 rounded-md border border-red-800 bg-red-950/40 p-3 text-sm text-red-300">{decisionError}</p>
+          )}
+
+          <div className="mt-4 flex gap-3">
+            <button
+              type="button"
+              disabled={deciding}
+              onClick={() => void decide("approve")}
+              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+            >
+              {deciding ? "Working…" : "Approve & publish"}
+            </button>
+            <button
+              type="button"
+              disabled={deciding}
+              onClick={() => void decide("reject")}
+              className="rounded-md border border-red-800 px-4 py-2 text-sm text-red-300 hover:bg-red-950/40 disabled:opacity-40"
+            >
+              Reject
+            </button>
+          </div>
+        </section>
+      )}
+
+      {content.publishedUrl && (
+        <section className="mt-6 rounded-lg border border-emerald-900 p-5 text-sm">
+          <h2 className="font-medium text-emerald-300">Published</h2>
+          <a href={content.publishedUrl} target="_blank" rel="noreferrer" className="underline">
+            {content.publishedUrl}
+          </a>
+        </section>
+      )}
 
       {/* Agent execution history */}
       <section className="mt-6 space-y-2">

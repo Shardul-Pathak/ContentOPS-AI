@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { NotFoundError, ValidationError } from "@/services/companies";
+import { ApprovalConflictError } from "@/services/workflow/approval";
 
 type ApiErrorBody = {
   error: string;
@@ -21,6 +22,10 @@ export function notFoundResponse(error: NotFoundError) {
   return NextResponse.json({ error: error.message }, { status: 404 });
 }
 
+export function conflictResponse(message: string) {
+  return NextResponse.json({ error: message }, { status: 409 });
+}
+
 export function unexpectedResponse(err: unknown) {
   console.error("[api] unexpected error:", err);
   return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -29,5 +34,6 @@ export function unexpectedResponse(err: unknown) {
 export function handleServiceError(err: unknown) {
   if (err instanceof ValidationError) return validationErrorResponse(err);
   if (err instanceof NotFoundError) return notFoundResponse(err);
+  if (err instanceof ApprovalConflictError) return conflictResponse(err.message);
   return unexpectedResponse(err);
 }

@@ -69,6 +69,7 @@ model Content {
   strategy       Json?
   draft          Json?
   qualityReview  Json?
+  publishedUrl   String?
 
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -77,6 +78,8 @@ model Content {
   agentRuns AgentRun[]
   sources   ResearchSource[]
   assetRows Asset[] // persisted asset records (replaces the old assets JSON blob)
+  approvals Approval[]
+
   @@index([campaignId])
   @@map("contents")
 }
@@ -136,4 +139,26 @@ model Asset {
 
   @@index([contentId])
   @@map("assets")
+}
+
+// Human approval for one specific external publishing action
+// (AGENTS.md sections 17/4.4). A rejected or consumed approval can never
+// authorize execution; every new external action needs a fresh row.
+model Approval {
+  id             String    @id @default(cuid())
+  contentId      String
+  status         String    @default("PENDING")
+  destination    String
+  payloadSummary Json
+  tfSessionId    String?
+  tfTurnId       String?
+  toolCallId     String?
+  threadId       String?
+  decidedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId])
+  @@map("approvals")
 }
