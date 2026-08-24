@@ -52,6 +52,10 @@ function modelFqnValue(): string {
   return process.env.MODEL_FQN ?? "custom/default-model";
 }
 
+// Hard cap per agent turn; prevents unbounded max_tokens on endpoints that
+// misreport limits (observed: OpenRouter free tier 400 with 1e12 tokens).
+const MAX_TOKENS_PER_TURN = Number(process.env.MODEL_MAX_OUTPUT_TOKENS ?? 8192);
+
 function responseFormat(schema: Parameters<typeof jsonSchemaFor>[0], role: AgentRole): TrueForgeApi.ResponseFormat {
   const mode = responseFormatMode();
   if (mode === "json_schema") {
@@ -220,7 +224,7 @@ export function agentDefinitions(): AgentDefinition[] {
     const schema = schemas[role];
     const sandboxEnabled = ENABLE_SANDBOX && role === "writer";
     const manifest: TrueForgeApi.AgentSpec = {
-      model: { name: modelFqnValue() },
+      model: { name: modelFqnValue(), params: { max_tokens: MAX_TOKENS_PER_TURN } },
       instructions: instructions[role],
       mcpServers: mcpServers(role),
       config: {
