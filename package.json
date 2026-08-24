@@ -14,7 +14,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "seed:agents": "tsx scripts/seed-agents.ts",
-    "mock:cms": "node scripts/mock-cms-server.mjs"
+    "mock:cms": "node scripts/mock-cms-server.mjs",
+    "list:models": "tsx scripts/list-models.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
