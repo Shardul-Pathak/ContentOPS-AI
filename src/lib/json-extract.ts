@@ -4,17 +4,7 @@
  * this). Extract the first balanced top-level object before parsing instead
  * of failing on decoration.
  */
-export function extractJsonCandidate(text: string): string | null {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return null;
-
-  // Strip ```json ... ``` / ``` ... ``` fences when they wrap the payload.
-  const fenced = /^```[a-zA-Z]*\s*([\s\S]*?)\s*```$/.exec(trimmed);
-  const body = fenced ? fenced[1].trim() : trimmed;
-
-  const start = body.indexOf("{");
-  if (start === -1) return null;
-
+function balancedSliceFrom(body: string, start: number): string | null {
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -33,18 +23,56 @@ export function extractJsonCandidate(text: string): string | null {
       if (depth === 0) return body.slice(start, i + 1);
     }
   }
-  return null;
+  return null; // unbalanced from this start (e.g. stray "{" prefix)
 }
 
-/** Parse the first JSON object found in `text`; null when nothing parses. */
-export function parseLooseJson(text: string): unknown | null {
-  const candidate = extractJsonCandidate(text);
-  if (candidate == null) return null;
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    return null;
+/**
+ * Every balanced top-level-object candidate in `text`, earliest first.
+ * Handles models emitting a stray leading "{" before the real payload
+ * (observed with Nemotron via OpenRouter): the first start may be unbalanced,
+ * so later "{" positions are tried as well.
+ */
+export function extractJsonCandidates(text: string): string[] {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return [];
+
+  // Strip ```json ... ``` / ``` ... ``` fences when they wrap the payload.
+  const fenced = /^```[a-zA-Z]*\s*([\s\S]*?)\s*```$/.exec(trimmed);
+  const body = fenced ? fenced[1].trim() : trimmed;
+
+  const candidates: string[] = [];
+  for (let idx = body.indexOf("{"); idx !== -1; idx = body.indexOf("{", idx + 1)) {
+    const slice = balancedSliceFrom(body, idx);
+    if (slice != null && !candidates.includes(slice)) candidates.push(slice);
   }
+  return candidates;
+}
+
+export function extractJsonCandidate(text: string): string | null {
+  return extractJsonCandidates(text)[0] ?? null;
+}
+
+/**
+ * Parse the most plausible JSON object in `text`. Among all balanced
+ * candidates, the LONGEST successful parse wins — the true root payload is
+ * always larger than any accidental inner fragment.
+ */
+export function parseLooseJson(text: string): unknown | null {
+  let best: unknown | null = null;
+  let bestLength = -1;
+  for (const candidate of extractJsonCandidates(text)) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      const length = candidate.length;
+      if (length > bestLength) {
+        best = parsed;
+        bestLength = length;
+      }
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return best;
 }
 
 export function truncateForLog(text: string, max = 200): string {
