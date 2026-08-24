@@ -47,7 +47,61 @@ model Campaign {
   updatedAt      DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contents Content[]
 
   @@index([companyId])
   @@map("campaigns")
+}
+
+// One content item per workflow run (campaign topic + generated article).
+// Stage artifacts are persisted as JSON after Zod validation — raw model
+// output never lands here unvalidated.
+model Content {
+  id             String   @id @default(cuid())
+  campaignId     String
+  topic          String
+  status         String   @default("CREATED")
+  currentAgent   String?
+  revisionCount  Int      @default(0)
+  failureReason  String?
+
+  research       Json?
+  strategy       Json?
+  draft          Json?
+  qualityReview  Json?
+  assets         Json?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  campaign  Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  agentRuns AgentRun[]
+
+  @@index([campaignId])
+  @@map("contents")
+}
+
+// Execution history for every agent invocation (AGENTS.md section 22).
+// TrueForge session/turn ids + last sequence number enable resume after
+// interruption via subscribeToTurn({ afterSequenceNumber }).
+model AgentRun {
+  id                  String    @id @default(cuid())
+  contentId           String
+  agentRole           String
+  attempt             Int       @default(1)
+  status              String    @default("RUNNING")
+  trueforgeSessionId  String?
+  trueforgeTurnId     String?
+  lastSequenceNumber  Int       @default(0)
+  activity            Json?
+  output              Json?
+  error               String?
+  metrics             Json?
+  startedAt           DateTime  @default(now())
+  finishedAt          DateTime?
+
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId])
+  @@map("agent_runs")
 }

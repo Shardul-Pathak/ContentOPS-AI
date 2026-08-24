@@ -12,14 +12,17 @@
     "test:watch": "vitest",
     "lint": "eslint .",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev"
+    "db:migrate": "prisma migrate dev",
+    "seed:agents": "tsx scripts/seed-agents.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.5.0",
+    "@truefoundry/trueforge-sdk": "^0.1.3",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.6",
