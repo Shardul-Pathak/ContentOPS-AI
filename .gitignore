@@ -41,3 +41,4 @@ Thumbs.db
 # Misc generated
 *.tsbuildinfo
 next-env.d.ts
+tmp-probe/
