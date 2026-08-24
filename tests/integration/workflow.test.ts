@@ -69,7 +69,10 @@ describe("workflow orchestration (mock runtime)", () => {
       content: expect.stringMatching(/vector/i),
     });
     expect(content.qualityReview).toMatchObject({ status: "PASS" });
-    expect(content.assets).toMatchObject({ assets: [expect.objectContaining({ type: "hero" })] });
+
+    const assets = await prisma.asset.findMany({ where: { contentId: content.id } });
+    expect(assets.length).toBeGreaterThan(0);
+    expect(assets[0]).toMatchObject({ type: "hero", altText: expect.any(String) });
 
     const roles = content.agentRuns.map((r) => r.agentRole);
     expect(roles).toEqual(["research", "growth", "writer", "quality", "image"]);
