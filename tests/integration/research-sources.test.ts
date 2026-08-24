@@ -34,6 +34,45 @@ async function startTestContent(topic: string) {
   return prisma.content.create({ data: { campaignId, topic, status: "CREATED" } });
 }
 
+describe("research evidence gate", () => {
+  it("fails the workflow when research returns no usable evidence", async () => {
+    const runtime = new MockAgentRuntime((role) =>
+      role === "research"
+        ? {
+            overrideOutputText: () =>
+              JSON.stringify(
+                researchResultSchema.parse({
+                  topic: "Empty topic",
+                  searchIntent: "informational",
+                  audienceQuestions: [],
+                  painPoints: [],
+                  keyPoints: [],
+                  sources: [],
+                  contentOpportunities: [],
+                  limitations: ["No search tool available"],
+                }),
+              ),
+          }
+        : {},
+    );
+
+    const content = await startTestContent("Empty topic");
+    try {
+      await runWorkflow(content.id, runtime);
+    } catch {
+      /* persisted */
+    }
+    const after = await prisma.content.findUniqueOrThrow({ where: { id: content.id } });
+    expect(after.status).toBe("FAILED");
+    expect(after.failureReason).toContain("no usable evidence");
+    // Nothing downstream should have run.
+    const roles = (await prisma.agentRun.findMany({ where: { contentId: content.id } })).map(
+      (r) => r.agentRole,
+    );
+    expect(roles).toEqual(["research"]);
+  });
+});
+
 describe("research agent provenance", () => {
   it("persists every verified source with url, publisher, and claims", async () => {
     const content = await startTestContent("Vector databases for product analytics");

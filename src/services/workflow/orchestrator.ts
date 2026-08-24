@@ -258,6 +258,21 @@ export async function runWorkflow(
       where: { id: contentId },
       data: { research: asJson(researchOutcome.artifact) },
     });
+
+    // Evidence gate (AGENTS.md section 4.3): honest limitations are fine, but
+    // a run with zero usable evidence would only produce a fabricated-feeling
+    // article downstream — stop here instead of writing one.
+    const r = researchOutcome.artifact;
+    if (
+      r.sources.length === 0 &&
+      r.keyPoints.length === 0 &&
+      r.audienceQuestions.length === 0
+    ) {
+      throw new WorkflowError(
+        `Research produced no usable evidence for "${r.topic}" (${r.limitations.join("; ") || "no limitations recorded"}). Attach a search connector to the research agent or choose a different topic.`,
+      );
+    }
+
     // Durable provenance: one row per verified source (§10 — preserve metadata).
     await prisma.researchSource.deleteMany({ where: { contentId } });
     if (researchOutcome.artifact.sources.length > 0) {
