@@ -82,6 +82,14 @@ export const assetSetSchema = z.object({
   assets: z.array(assetSchema).min(1, "at least a hero asset is required"),
 });
 
+// Wire format for the quality agent's response_format: OpenAI-compatible
+// providers reject root-level unions ("anyOf" at the schema root), so the
+// verdict travels inside a single-object envelope. App-side validation still
+// accepts both this envelope and the bare PASS/FAIL object.
+export const qualityReviewResponseSchema = z.object({
+  review: qualityReviewSchema,
+});
+
 // What the publishing agent proposes to send where — frozen into the Approval
 // record the human reviews (AGENTS.md section 17 preview fields).
 export const publishPayloadSchema = z.object({
@@ -104,6 +112,25 @@ export type ContentStrategy = z.infer<typeof contentStrategySchema>;
 export type ArticleDraft = z.infer<typeof articleDraftSchema>;
 export type QualityReview = z.infer<typeof qualityReviewSchema>;
 export type AssetSet = z.infer<typeof assetSetSchema>;
+
+/**
+ * Parses the quality agent's text output. Accepts the enveloped wire format
+ * ({ "review": {...} }) required by OpenAI-compatible providers as well as
+ * the bare PASS/FAIL object used by fixtures and older runs.
+ */
+export function parseQualityReviewOutput(text: string): QualityReview | null {
+  try {
+    const json: unknown = JSON.parse(text);
+    const candidate =
+      json != null && typeof json === "object" && "review" in json
+        ? (json as { review: unknown }).review
+        : json;
+    const parsed = qualityReviewSchema.safeParse(candidate);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
 export type PublishPayload = z.infer<typeof publishPayloadSchema>;
 export type PublishResult = z.infer<typeof publishResultSchema>;
 
@@ -115,7 +142,7 @@ type SchemaFor =
   | typeof researchResultSchema
   | typeof contentStrategySchema
   | typeof articleDraftSchema
-  | typeof qualityReviewSchema
+  | typeof qualityReviewResponseSchema
   | typeof assetSetSchema
   | typeof publishPayloadSchema;
 
