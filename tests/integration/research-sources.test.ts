@@ -73,6 +73,29 @@ describe("research evidence gate", () => {
   });
 });
 
+describe("research tool-use gate", () => {
+  it("refuses sources claimed without any search tool calls", async () => {
+    const runtime = new MockAgentRuntime((role) =>
+      role === "research"
+        ? {
+            // Sources present, but the runtime reports zero tool activity.
+            suppressActivity: true,
+          }
+        : {},
+    );
+
+    const content = await startTestContent("Fabricated citations topic");
+    try {
+      await runWorkflow(content.id, runtime);
+    } catch {
+      /* persisted */
+    }
+    const after = await prisma.content.findUniqueOrThrow({ where: { id: content.id } });
+    expect(after.status).toBe("FAILED");
+    expect(after.failureReason).toContain("without performing any search tool calls");
+  });
+});
+
 describe("research agent provenance", () => {
   it("persists every verified source with url, publisher, and claims", async () => {
     const content = await startTestContent("Vector databases for product analytics");
