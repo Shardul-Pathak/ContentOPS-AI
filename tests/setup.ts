@@ -3,6 +3,11 @@ import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// Workflow tests are always deterministic: they exercise the mock runtime,
+// never a live harness — even when the developer's .env selects trueforge
+// (vitest loads .env files into process.env like Vite does).
+process.env.AGENT_PROVIDER = "mock";
+
 // Each test file gets its own throwaway SQLite database so tests never touch
 // development data and can run in parallel. Must run before any module imports
 // @prisma/client, because PrismaClient reads DATABASE_URL at instantiation.

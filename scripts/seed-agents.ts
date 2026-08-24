@@ -55,31 +55,58 @@ async function main() {
   const providerName = process.env.MODEL_PROVIDER_NAME;
   const providerBaseUrl = process.env.MODEL_PROVIDER_BASE_URL;
   const providerApiKey = process.env.MODEL_PROVIDER_API_KEY;
-  const modelFqn = process.env.MODEL_FQN;
+  // Upstream model identifier exactly as the endpoint expects it
+  // (e.g. OpenRouter slugs contain a slash: "nvidia/nemotron-3-super-120b-a12b:free").
+  const upstreamModel = process.env.MODEL_UPSTREAM_MODEL;
+  // Registry name for the model inside TrueForge (single segment, sanitized).
+  function registryModelName(upstream: string): string {
+    const lastSegment = upstream.split("/").pop() ?? upstream;
+    return lastSegment.replace(/[^a-zA-Z0-9._-]/g, "-");
+  }
+  const derivedFqn =
+    upstreamModel && providerName
+      ? `${providerName}/${registryModelName(upstreamModel)}`
+      : undefined;
+  const modelFqn = process.env.MODEL_FQN ?? derivedFqn;
 
   if (!modelFqn) {
     fail(
       "MODEL_FQN is not set — agents cannot be created without a known model.",
       [
-        "Option A (configure here): set MODEL_PROVIDER_NAME, MODEL_PROVIDER_BASE_URL, MODEL_PROVIDER_API_KEY and MODEL_FQN (e.g. custom/my-model) in .env, then re-run.",
+        "Option A (configure here): set MODEL_PROVIDER_NAME, MODEL_PROVIDER_BASE_URL, MODEL_PROVIDER_API_KEY and MODEL_UPSTREAM_MODEL (the exact upstream id, e.g. nvidia/nemotron-3-super-120b-a12b:free) in .env, then re-run.",
         "Option B (already configured): open TrueForge → Settings → Models, note an available model FQN (e.g. anthropic/claude-sonnet-4-6) and set MODEL_FQN to it.",
       ],
     );
   }
 
   if (providerName && providerBaseUrl && providerApiKey) {
+    if (!upstreamModel) {
+      fail(
+        "MODEL_PROVIDER_* is set but MODEL_UPSTREAM_MODEL is missing.",
+        [
+          "MODEL_UPSTREAM_MODEL must be the exact upstream id your endpoint expects (for OpenRouter this includes the vendor prefix, e.g. nvidia/nemotron-3-super-120b-a12b:free).",
+        ],
+      );
+    }
     try {
-      const [providerId, modelId] = modelFqn.split("/");
       await client.settings.modelProviders.createOrUpdate({
         manifest: {
           type: "custom",
-          name: providerId,
+          name: providerName,
           baseUrl: providerBaseUrl,
           auth: { apiKey: providerApiKey },
-          models: [{ name: modelId ?? "default", modelId: modelId ?? "default", properties: {} }],
+          models: [
+            {
+              name: registryModelName(upstreamModel),
+              modelId: upstreamModel,
+              properties: {},
+            },
+          ],
         },
       });
-      console.log(`✓ model provider "${providerId}" upserted (${modelFqn})`);
+      console.log(
+        `✓ model provider "${providerName}" upserted (upstream: ${upstreamModel} → registry FQN: ${modelFqn})`,
+      );
     } catch (err) {
       const { status, detail } = describeError(err);
       fail(`model provider upsert failed (${status ?? "network"})`, [detail]);
