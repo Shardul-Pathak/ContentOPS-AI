@@ -75,7 +75,7 @@ describe("workflow orchestration (mock runtime)", () => {
     expect(assets[0]).toMatchObject({ type: "hero", altText: expect.any(String) });
 
     const roles = content.agentRuns.map((r) => r.agentRole);
-    expect(roles).toEqual(["research", "growth", "writer", "quality", "image"]);
+    expect(roles).toEqual(["research", "growth", "writer", "quality", "image", "publisher"]);
     for (const run of content.agentRuns) {
       expect(run.status).toBe("DONE");
       expect(run.trueforgeSessionId).toBeTruthy();

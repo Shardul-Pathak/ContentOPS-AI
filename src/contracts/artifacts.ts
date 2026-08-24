@@ -82,12 +82,30 @@ export const assetSetSchema = z.object({
   assets: z.array(assetSchema).min(1, "at least a hero asset is required"),
 });
 
+// What the publishing agent proposes to send where — frozen into the Approval
+// record the human reviews (AGENTS.md section 17 preview fields).
+export const publishPayloadSchema = z.object({
+  destination: z.string().min(1),
+  title: z.string().min(1),
+  slug: z.string().min(1),
+  metaDescription: z.string().min(1),
+  assetCount: z.number().int().nonnegative(),
+  externalAction: z.string().min(1),
+});
+
+export const publishResultSchema = z.object({
+  publishedUrl: z.string().url(),
+  externalId: z.string().optional(),
+});
+
 export type Source = z.infer<typeof sourceSchema>;
 export type ResearchResult = z.infer<typeof researchResultSchema>;
 export type ContentStrategy = z.infer<typeof contentStrategySchema>;
 export type ArticleDraft = z.infer<typeof articleDraftSchema>;
 export type QualityReview = z.infer<typeof qualityReviewSchema>;
 export type AssetSet = z.infer<typeof assetSetSchema>;
+export type PublishPayload = z.infer<typeof publishPayloadSchema>;
+export type PublishResult = z.infer<typeof publishResultSchema>;
 
 // --- JSON Schema generation for TrueForge response_format -------------------
 // Note: discriminated unions in the quality review produce anyOf schemas;
@@ -98,7 +116,8 @@ type SchemaFor =
   | typeof contentStrategySchema
   | typeof articleDraftSchema
   | typeof qualityReviewSchema
-  | typeof assetSetSchema;
+  | typeof assetSetSchema
+  | typeof publishPayloadSchema;
 
 export function jsonSchemaFor(schema: SchemaFor): Record<string, unknown> {
   return zodToJsonSchema(schema, { target: "openAi" }) as Record<string, unknown>;

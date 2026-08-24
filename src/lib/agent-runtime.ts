@@ -198,11 +198,19 @@ function truncate(s: string, n: number): string {
 
 // --- Mock implementation -----------------------------------------------------
 
+export interface MockInvocationContext {
+  callIndex: number;
+  /** 1-based index of this session among sessions created for the role. */
+  sessionOrdinal: number;
+}
+
 export interface MockScriptEntry {
-  /** Override the fixture output text for a given call index. */
-  overrideOutputText?: (callIndex: number) => string | null;
-  /** Force an error result instead of returning output. */
+  /** Override the fixture output text for a given call. */
+  overrideOutputText?: (ctx: MockInvocationContext, prompt: string) => string | null;
+  /** Fail calls whose per-session index is listed here. */
   failCallIndexes?: number[];
+  /** Alternatively fail specific publisher sessions (1-based), e.g. execute-only. */
+  failSessionOrdinals?: number[];
 }
 
 export class MockAgentRuntime implements AgentRuntime {
@@ -213,7 +221,9 @@ export class MockAgentRuntime implements AgentRuntime {
   /** Every user message sent per session role — lets tests assert prompts. */
   readonly recordedPrompts: { sessionId: string; role: AgentRole; content: string }[] = [];
 
-  constructor(private readonly scriptForRole: (role: AgentRole) => MockScriptEntry = () => ({})) {}
+  constructor(
+    private readonly scriptForRole: (role: AgentRole, ctx: MockInvocationContext) => MockScriptEntry = () => ({}),
+  ) {}
 
   async createSessionId(role: AgentRole): Promise<string> {
     const sessionId = `mock-sess-${role}-${++this.counter}`;
@@ -230,9 +240,11 @@ export class MockAgentRuntime implements AgentRuntime {
 
     const callIndex = this.callsPerSession.get(sessionId) ?? 0;
     this.callsPerSession.set(sessionId, callIndex + 1);
+    const sessionOrdinal = (this.sessionsByRole.get(role) ?? [sessionId]).indexOf(sessionId) + 1;
+    const ctx: MockInvocationContext = { callIndex, sessionOrdinal };
 
-    const script = this.scriptForRole(role);
-    if (script.failCallIndexes?.includes(callIndex)) {
+    const script = this.scriptForRole(role, ctx);
+    if (script.failCallIndexes?.includes(callIndex) || script.failSessionOrdinals?.includes(sessionOrdinal)) {
       return {
         status: "error",
         outputText: null,
@@ -244,10 +256,10 @@ export class MockAgentRuntime implements AgentRuntime {
         lastSequenceNumber: 2,
       };
     }
-    const overridden = script.overrideOutputText?.(callIndex);
+    const overridden = script.overrideOutputText?.(ctx, content);
     return {
       status: "done",
-      outputText: overridden ?? JSON.stringify(fixtureOutput(role)),
+      outputText: overridden ?? JSON.stringify(fixtureOutput(role, content)),
       pendingApprovals: [],
       activity: [{ type: "tool_response", detail: "(mock)" }],
       sessionId,
@@ -266,7 +278,7 @@ function sessionIdToRole(sessionId: string): AgentRole {
   return m[1] as AgentRole;
 }
 
-export function fixtureOutput(role: AgentRole): unknown {
+export function fixtureOutput(role: AgentRole, prompt = ""): unknown {
   switch (role) {
     case "research":
       return {
@@ -338,6 +350,19 @@ export function fixtureOutput(role: AgentRole): unknown {
         ],
       };
     case "publisher":
-      return { publishedUrl: "https://blog.example.com/mock-article", externalId: "mock-123" };
+      // Two publisher phases share the role: payload preparation (workflow
+      // tail) and approved execution (approval service). Prompts carry an
+      // explicit phase marker.
+      if (prompt.startsWith("EXECUTE")) {
+        return { publishedUrl: "https://blog.example.com/choosing-a-vector-database", externalId: "mock-123" };
+      }
+      return {
+        destination: "company-blog",
+        title: "Choosing a Vector Database for Product Analytics",
+        slug: "choosing-a-vector-database-for-product-analytics",
+        metaDescription: "Selection criteria, latency trade-offs, and licensing notes for teams adding vector search to analytics.",
+        assetCount: 1,
+        externalAction: "POST article with hero asset to the configured company blog endpoint",
+      };
   }
 }
