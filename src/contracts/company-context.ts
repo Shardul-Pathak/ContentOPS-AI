@@ -32,15 +32,17 @@ export const marketingSchema = z.object({
 
 export const companyContextInputSchema = z.object({
   name: z.string().min(1, "Company name is required").max(200),
-  description: z.string().max(10000).optional(),
+  // nullish(): rows reloaded from the database carry explicit nulls; API
+  // payloads may simply omit the fields.
+  description: z.string().max(10000).nullish(),
   website: z
     .string()
     .max(500)
-    .optional()
+    .nullish()
     .refine((v) => v == null || /^https?:\/\/.+/.test(v), {
       message: "Website must be an http(s) URL",
     }),
-  industry: z.string().max(200).optional(),
+  industry: z.string().max(200).nullish(),
   products: z.array(productSchema).default([]),
   audience: audienceSchema.default({ primary: [], secondary: [], painPoints: [] }),
   brand: brandSchema.default({ styleRules: [], prohibitedLanguage: [] }),

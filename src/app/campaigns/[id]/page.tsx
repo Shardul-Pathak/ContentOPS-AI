@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 type Campaign = {
@@ -31,12 +31,16 @@ const NEXT_ACTIONS: Record<string, { to: string; label: string }[]> = {
 export default function CampaignDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
+  const router = useRouter();
 
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [topicsText, setTopicsText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [selectedTopic, setSelectedTopic] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/campaigns/${id}`);
@@ -85,6 +89,27 @@ export default function CampaignDetailPage() {
       return;
     }
     void patch({ topics });
+  }
+
+  async function handleStartWorkflow() {
+    setStartError(null);
+    setStarting(true);
+    try {
+      const res = await fetch(`/api/campaigns/${id}/contents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: selectedTopic }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({ error: res.statusText }));
+        setStartError(b.error ?? `Request failed (${res.status})`);
+        return;
+      }
+      const { id: contentId } = (await res.json()) as { id: string };
+      router.push(`/content/${contentId}`);
+    } finally {
+      setStarting(false);
+    }
   }
 
   const editable = campaign?.status === "DRAFT" || campaign?.status === "ACTIVE";
@@ -161,10 +186,40 @@ export default function CampaignDetailPage() {
       </section>
 
       <section className="mt-8 rounded-lg border border-dashed border-neutral-800 p-5">
-        <h2 className="text-sm font-medium text-neutral-300">Workflow</h2>
+        <h2 className="text-sm font-medium text-neutral-300">Start content workflow</h2>
         <p className="mt-1 text-xs text-neutral-500">
-          Content generation workflow arrives in the orchestration milestone.
+          Runs Research → Growth → Writer → Quality → Image agents, then waits for your
+          approval before any publishing action.
         </p>
+        {editable ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <select
+              className="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm"
+              value={selectedTopic}
+              onChange={(e) => setSelectedTopic(e.target.value)}
+            >
+              <option value="">— pick a topic —</option>
+              {(campaign.topics as string[]).map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!selectedTopic || starting}
+              onClick={handleStartWorkflow}
+              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+            >
+              {starting ? "Starting…" : "Start workflow"}
+            </button>
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-neutral-500">
+            Activate the campaign (status DRAFT) to start workflows.
+          </p>
+        )}
+        {startError && (
+          <p className="mt-2 rounded-md border border-red-800 bg-red-950/40 p-3 text-sm text-red-300">{startError}</p>
+        )}
       </section>
     </main>
   );
