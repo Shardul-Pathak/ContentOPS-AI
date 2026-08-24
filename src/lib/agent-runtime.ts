@@ -210,6 +210,8 @@ export class MockAgentRuntime implements AgentRuntime {
   private counter = 0;
   private sessionsByRole = new Map<AgentRole, string[]>();
   private callsPerSession = new Map<string, number>();
+  /** Every user message sent per session role — lets tests assert prompts. */
+  readonly recordedPrompts: { sessionId: string; role: AgentRole; content: string }[] = [];
 
   constructor(private readonly scriptForRole: (role: AgentRole) => MockScriptEntry = () => ({})) {}
 
@@ -222,8 +224,10 @@ export class MockAgentRuntime implements AgentRuntime {
     return sessionId;
   }
 
-  async runUserMessage(sessionId: string, _content: string): Promise<TurnResult> {
+  async runUserMessage(sessionId: string, content: string): Promise<TurnResult> {
     const role = sessionIdToRole(sessionId);
+    this.recordedPrompts.push({ sessionId, role, content });
+
     const callIndex = this.callsPerSession.get(sessionId) ?? 0;
     this.callsPerSession.set(sessionId, callIndex + 1);
 
