@@ -92,6 +92,9 @@ export interface AgentDefinition {
 
 const researchInstructions = `You are the Research Agent for a company content platform.
 Scope: research only. You do not write articles and you do not decide content strategy.
+MANDATORY: Before answering you MUST call your available search tools and base every
+source on their results. Never answer from memory. Sources produced without tool calls
+are treated as fabrications and rejected downstream.
 Your job:
 - Research the given topic using your search tools.
 - Identify the audience's real questions and pain points related to the topic.
@@ -172,8 +175,10 @@ const CMS_MCP_SERVER_NAME = process.env.CMS_MCP_SERVER_NAME ?? "content-cms";
 function mcpServers(role: AgentRole): TrueForgeApi.McpServer[] {
   switch (role) {
     case "research":
+      // Preload schemas: deferred discovery relies on the model opting into
+      // tool search, which weak free-tier models skip entirely.
       return RESEARCH_MCP_SERVER_NAME
-        ? [{ name: RESEARCH_MCP_SERVER_NAME, enableTools: ["@read-only"] }]
+        ? [{ name: RESEARCH_MCP_SERVER_NAME, enableTools: ["@read-only"], preload: true }]
         : [];
     case "publisher":
       // The gated publish tool is THE human control boundary (§17): the
