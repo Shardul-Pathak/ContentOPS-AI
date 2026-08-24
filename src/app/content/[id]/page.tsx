@@ -30,7 +30,7 @@ type ContentState = {
     cta?: string;
   } | null;
   qualityReview: { status?: string; score?: number; issues?: { severity: string; description: string }[] } | null;
-  assets: { assets?: { type: string; url: string; altText: string }[] } | null;
+  assets: { id: string; type: string; url: string; altText: string; description: string }[];
   campaignId: string;
   agentRuns: AgentRun[];
 };
@@ -214,12 +214,12 @@ export default function ContentPage() {
         </section>
       )}
 
-      {content.assets?.assets && content.assets.assets.length > 0 && (
+      {content.assets.length > 0 && (
         <section className="mt-6">
           <h2 className="mb-2 text-lg font-medium">Assets</h2>
-          {content.assets.assets.map((a, i) => (
+          {content.assets.map((a) => (
             // eslint-disable-next-line @next/next/no-img-element
-            <img key={i} src={a.url} alt={a.altText} className="max-h-56 rounded-md border border-neutral-800" />
+            <img key={a.id} src={a.url} alt={a.altText} className="max-h-56 rounded-md border border-neutral-800" />
           ))}
         </section>
       )}

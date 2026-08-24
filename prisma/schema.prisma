@@ -69,7 +69,6 @@ model Content {
   strategy       Json?
   draft          Json?
   qualityReview  Json?
-  assets         Json?
 
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -77,7 +76,7 @@ model Content {
   campaign  Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   agentRuns AgentRun[]
   sources   ResearchSource[]
-
+  assetRows Asset[] // persisted asset records (replaces the old assets JSON blob)
   @@index([campaignId])
   @@map("contents")
 }
@@ -122,4 +121,19 @@ model ResearchSource {
 
   @@index([contentId])
   @@map("research_sources")
+}
+
+// Generated visual assets for an article (hero required by default).
+model Asset {
+  id          String @id @default(cuid())
+  contentId   String
+  type        String
+  url         String
+  altText     String
+  description String
+
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId])
+  @@map("assets")
 }

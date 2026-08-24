@@ -406,10 +406,18 @@ export async function runWorkflow(
       ].join("\n\n"),
       (t) => assetSetSchema.parse(JSON.parse(t)) as AssetSet,
     );
-    await prisma.content.update({
-      where: { id: contentId },
-      data: { assets: asJson(assetsOutcome.artifact) },
-    });
+    await prisma.asset.deleteMany({ where: { contentId } });
+    if (assetsOutcome.artifact.assets.length > 0) {
+      await prisma.asset.createMany({
+        data: assetsOutcome.artifact.assets.map((a) => ({
+          contentId,
+          type: a.type,
+          url: a.url,
+          altText: a.altText,
+          description: a.description,
+        })),
+      });
+    }
 
     await setStatus(contentId, "AWAITING_APPROVAL", null);
     // Publishing arrives with the approval gate milestone: the pipeline
