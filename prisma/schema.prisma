@@ -76,6 +76,7 @@ model Content {
 
   campaign  Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   agentRuns AgentRun[]
+  sources   ResearchSource[]
 
   @@index([campaignId])
   @@map("contents")
@@ -104,4 +105,21 @@ model AgentRun {
 
   @@index([contentId])
   @@map("agent_runs")
+}
+
+// Provenance for every source returned by the research agent
+// (AGENTS.md section 10: preserve source metadata; never invent sources).
+model ResearchSource {
+  id              String @id @default(cuid())
+  contentId       String
+  url             String
+  title           String
+  publisher       String
+  relevance       String
+  claimsSupported Json
+
+  content Content @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId])
+  @@map("research_sources")
 }

@@ -44,7 +44,28 @@ async function main() {
     console.log(`✓ model provider "${providerId}" upserted (${modelFqn})`);
   }
 
-  // 2. Named agents -----------------------------------------------------------
+  // 2. Research MCP server (optional; catalog servers like Exa connect via UI)
+  const researchMcpName = process.env.RESEARCH_MCP_SERVER_NAME;
+  const researchMcpUrl = process.env.RESEARCH_MCP_SERVER_URL;
+  if (researchMcpName && researchMcpUrl) {
+    await client.settings.mcpServers.createOrUpdate({
+      manifest: {
+        type: "remote",
+        name: researchMcpName,
+        url: researchMcpUrl,
+        description: "Web search / source retrieval for the research agent",
+        auth: {
+          type: "header",
+          headers: { Authorization: `Bearer ${process.env.RESEARCH_MCP_HEADER_TOKEN ?? ""}` },
+        },
+      },
+    });
+    console.log(`✓ research MCP server "${researchMcpName}" upserted`);
+  } else if (researchMcpName) {
+    console.log(`• using catalog MCP server "${researchMcpName}" — ensure it is connected in Settings → Connectors`);
+  }
+
+  // 3. Named agents -----------------------------------------------------------
   for (const def of agentDefinitions()) {
     try {
       await client.agents.create({ name: def.name, manifest: def.manifest });

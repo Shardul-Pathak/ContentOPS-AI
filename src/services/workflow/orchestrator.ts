@@ -252,6 +252,20 @@ export async function runWorkflow(
       where: { id: contentId },
       data: { research: asJson(researchOutcome.artifact) },
     });
+    // Durable provenance: one row per verified source (§10 — preserve metadata).
+    await prisma.researchSource.deleteMany({ where: { contentId } });
+    if (researchOutcome.artifact.sources.length > 0) {
+      await prisma.researchSource.createMany({
+        data: researchOutcome.artifact.sources.map((s) => ({
+          contentId,
+          url: s.url,
+          title: s.title,
+          publisher: s.publisher,
+          relevance: s.relevance,
+          claimsSupported: asJson(s.claimsSupported),
+        })),
+      });
+    }
     await setStatus(contentId, "STRATEGIZING", "research");
 
     // --- STRATEGIZING -------------------------------------------------------
