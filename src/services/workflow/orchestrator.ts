@@ -22,6 +22,8 @@ import { prisma } from "@/lib/db";
 import {
   MockAgentRuntime,
   TrueForgeRuntime,
+  type ActivityItem,
+  type ActivitySink,
   type AgentRuntime,
 } from "@/lib/agent-runtime";
 
@@ -110,9 +112,32 @@ async function runStage<A>(
   });
   await setStatus(contentId, statusDuringStage, role);
 
+  // Live progress: persist harness activity while the turn runs so the
+  // polling UI shows tool calls in real time (debounced to limit writes).
+  let liveActivity: ActivityItem[] = [];
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushActivity = () => {
+    if (liveActivity.length === 0) return;
+    const snapshot = liveActivity;
+    void prisma.agentRun
+      .update({ where: { id: run.id }, data: { activity: asJson(snapshot) } })
+      .catch(() => {});
+    flushTimer = null;
+  };
+  const onActivity: ActivitySink = (item) => {
+    liveActivity = [...liveActivity, item];
+    if (!flushTimer) flushTimer = setTimeout(flushActivity, 800);
+  };
+  const stopFlushTimer = () => {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+  };
+
   try {
     const sessionId = await runtime.createSessionId(role);
-    let result = await runtime.runUserMessage(sessionId, prompt);
+    let result = await runtime.runUserMessage(sessionId, prompt, onActivity);
 
     // One corrective retry when the model returns unparseable output
     // (AGENTS.md section 23: retry only when safe).

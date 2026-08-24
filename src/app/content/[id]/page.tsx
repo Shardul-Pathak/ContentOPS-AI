@@ -49,6 +49,22 @@ type ContentState = {
   agentRuns: AgentRun[];
 };
 
+function ElapsedBadge({ startedAt }: { startedAt: string }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => force((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const secs = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  const mm = Math.floor(secs / 60);
+  const ss = String(secs % 60).padStart(2, "0");
+  return (
+    <span className="ml-2 font-mono text-[10px] text-sky-400/80">
+      {mm}:{ss}
+    </span>
+  );
+}
+
 const TERMINAL_OR_WAITING = new Set([
   "AWAITING_APPROVAL",
   "PUBLISHED",
@@ -273,7 +289,14 @@ export default function ContentPage() {
           <div key={run.id} className="rounded-md border border-neutral-800 p-3 text-sm">
             <div className="flex items-center justify-between">
               <span className="font-medium capitalize">
-                {run.agentRole} <span className="text-xs text-neutral-500">attempt {run.attempt}</span>
+                {run.status === "RUNNING" && (
+                  <span className="mr-1 inline-block h-2 w-2 animate-pulse rounded-full bg-sky-400 align-middle" />
+                )}
+                {run.agentRole}{" "}
+                <span className="text-xs text-neutral-500">attempt {run.attempt}</span>
+                {run.status === "RUNNING" && (
+                  <ElapsedBadge startedAt={run.startedAt} />
+                )}
               </span>
               <span
                 className={`rounded-full px-2 py-0.5 text-xs ${
@@ -288,8 +311,8 @@ export default function ContentPage() {
               </span>
             </div>
             {run.activity && run.activity.length > 0 && (
-              <ul className="mt-1 list-disc pl-5 text-xs text-neutral-500">
-                {run.activity.slice(0, 6).map((a, i) => (
+              <ul className="mt-1 list-disc pl-5 text-xs text-neutral-400">
+                {run.activity.slice(-12).map((a, i) => (
                   <li key={i}>
                     {a.type}
                     {a.detail ? `: ${a.detail}` : ""}
