@@ -2,10 +2,12 @@
  * Seeds the local TrueForge server with:
  *  1. The OpenAI-compatible model provider from env
  *     (MODEL_PROVIDER_NAME / MODEL_PROVIDER_BASE_URL / MODEL_PROVIDER_API_KEY)
- *  2. The six named content agents referencing MODEL_FQN.
+ *     — optional when the provider is already configured via the TrueForge UI
+ *  2. Optional MCP servers (research search, gated CMS endpoint)
+ *  3. The six named content agents referencing MODEL_FQN.
  *
- * Idempotent: providers and agents are upserted by name. Credentials are sent
- * once to the TrueForge connector store; they are never written to agent
+ * Idempotent: providers/servers/agents are upserted by name. Credentials are
+ * sent once to the TrueForge connector store; they are never written to agent
  * manifests, this repository, or logs.
  *
  * Usage: npm run seed:agents   (requires a running TrueForge server)
@@ -13,11 +15,41 @@
 import { TrueForge } from "@truefoundry/trueforge-sdk";
 import { agentDefinitions } from "../src/config/agents";
 
+function fail(message: string, hints: string[] = []): never {
+  console.error(`\n✗ ${message}`);
+  for (const h of hints) console.error(`  • ${h}`);
+  process.exit(1);
+}
+
+function describeError(err: unknown): { status?: number; detail: string } {
+  const e = err as { statusCode?: number; message?: string; body?: unknown };
+  const detail =
+    e.body != null
+      ? JSON.stringify(e.body).slice(0, 400)
+      : (e.message ?? String(err));
+  return { status: e.statusCode, detail };
+}
+
 async function main() {
   const baseUrl = process.env.TRUEFORGE_BASE_URL ?? "http://localhost:8790";
   console.log(`Seeding TrueForge at ${baseUrl}`);
 
   const client = new TrueForge({ baseUrl, timeoutInSeconds: 120 });
+
+  // 0. Connectivity preflight — fail with actionable hints, not "fetch failed".
+  try {
+    await client.agents.list();
+  } catch (err) {
+    fail(
+      `TrueForge is not reachable at ${baseUrl}`,
+      [
+        "Start it in another terminal:  npx @truefoundry/trueforge@latest",
+        "Then open http://localhost:8790 to confirm it is up.",
+        "If you run it on a custom port, set TRUEFORGE_BASE_URL in .env.",
+      ],
+    );
+  }
+  console.log("✓ server reachable");
 
   // 1. Model provider ---------------------------------------------------------
   const providerName = process.env.MODEL_PROVIDER_NAME;
@@ -25,63 +57,86 @@ async function main() {
   const providerApiKey = process.env.MODEL_PROVIDER_API_KEY;
   const modelFqn = process.env.MODEL_FQN;
 
-  if (!providerName || !providerBaseUrl || !providerApiKey || !modelFqn) {
-    console.warn(
-      "[seed] MODEL_PROVIDER_* / MODEL_FQN not fully configured — skipping model provider setup.\n" +
-        "       Configure a provider in the TrueForge UI (Settings → Models) or fill .env.",
+  if (!modelFqn) {
+    fail(
+      "MODEL_FQN is not set — agents cannot be created without a known model.",
+      [
+        "Option A (configure here): set MODEL_PROVIDER_NAME, MODEL_PROVIDER_BASE_URL, MODEL_PROVIDER_API_KEY and MODEL_FQN (e.g. custom/my-model) in .env, then re-run.",
+        "Option B (already configured): open TrueForge → Settings → Models, note an available model FQN (e.g. anthropic/claude-sonnet-4-6) and set MODEL_FQN to it.",
+      ],
     );
-  } else {
-    const [providerId, modelId] = modelFqn.split("/");
-    await client.settings.modelProviders.createOrUpdate({
-      manifest: {
-        type: "custom",
-        name: providerId,
-        baseUrl: providerBaseUrl,
-        auth: { apiKey: providerApiKey },
-        models: [{ name: modelId ?? "default", modelId: modelId ?? "default", properties: {} }],
-      },
-    });
-    console.log(`✓ model provider "${providerId}" upserted (${modelFqn})`);
   }
 
-  // 2. Research MCP server (optional; catalog servers like Exa connect via UI)
+  if (providerName && providerBaseUrl && providerApiKey) {
+    try {
+      const [providerId, modelId] = modelFqn.split("/");
+      await client.settings.modelProviders.createOrUpdate({
+        manifest: {
+          type: "custom",
+          name: providerId,
+          baseUrl: providerBaseUrl,
+          auth: { apiKey: providerApiKey },
+          models: [{ name: modelId ?? "default", modelId: modelId ?? "default", properties: {} }],
+        },
+      });
+      console.log(`✓ model provider "${providerId}" upserted (${modelFqn})`);
+    } catch (err) {
+      const { status, detail } = describeError(err);
+      fail(`model provider upsert failed (${status ?? "network"})`, [detail]);
+    }
+  } else {
+    console.log(
+      `• MODEL_PROVIDER_* incomplete — assuming "${modelFqn}" already exists (configured via the TrueForge UI).`,
+    );
+  }
+
+  // 2. MCP servers ------------------------------------------------------------
   const researchMcpName = process.env.RESEARCH_MCP_SERVER_NAME;
   const researchMcpUrl = process.env.RESEARCH_MCP_SERVER_URL;
   if (researchMcpName && researchMcpUrl) {
-    await client.settings.mcpServers.createOrUpdate({
-      manifest: {
-        type: "remote",
-        name: researchMcpName,
-        url: researchMcpUrl,
-        description: "Web search / source retrieval for the research agent",
-        auth: {
-          type: "header",
-          headers: { Authorization: `Bearer ${process.env.RESEARCH_MCP_HEADER_TOKEN ?? ""}` },
+    try {
+      await client.settings.mcpServers.createOrUpdate({
+        manifest: {
+          type: "remote",
+          name: researchMcpName,
+          url: researchMcpUrl,
+          description: "Web search / source retrieval for the research agent",
+          auth: {
+            type: "header",
+            headers: { Authorization: `Bearer ${process.env.RESEARCH_MCP_HEADER_TOKEN ?? ""}` },
+          },
         },
-      },
-    });
-    console.log(`✓ research MCP server "${researchMcpName}" upserted`);
+      });
+      console.log(`✓ research MCP server "${researchMcpName}" upserted`);
+    } catch (err) {
+      const { status, detail } = describeError(err);
+      fail(`research MCP upsert failed (${status ?? "network"})`, [detail]);
+    }
   } else if (researchMcpName) {
     console.log(`• using catalog MCP server "${researchMcpName}" — ensure it is connected in Settings → Connectors`);
   }
 
-  // 2b. CMS MCP server (the gated publishing destination)
   const cmsMcpName = process.env.CMS_MCP_SERVER_NAME;
   const cmsMcpUrl = process.env.CMS_MCP_URL;
   if (cmsMcpName && cmsMcpUrl) {
-    await client.settings.mcpServers.createOrUpdate({
-      manifest: {
-        type: "remote",
-        name: cmsMcpName,
-        url: cmsMcpUrl,
-        description: "Company blog CMS — publish_article is approval-gated",
-        auth: {
-          type: "header",
-          headers: { Authorization: `Bearer ${process.env.CMS_MCP_HEADER_TOKEN ?? ""}` },
+    try {
+      await client.settings.mcpServers.createOrUpdate({
+        manifest: {
+          type: "remote",
+          name: cmsMcpName,
+          url: cmsMcpUrl,
+          description: "Company blog CMS — publish_article is approval-gated",
+          auth: {
+            type: "header",
+            headers: { Authorization: `Bearer ${process.env.CMS_MCP_HEADER_TOKEN ?? ""}` },
+          },
         },
-      },
-    });
-    console.log(`✓ CMS MCP server "${cmsMcpName}" upserted (${cmsMcpUrl})`);
+      });
+      console.log(`✓ CMS MCP server "${cmsMcpName}" upserted (${cmsMcpUrl})`);
+    } catch (err) {
+      const { status, detail } = describeError(err);
+      fail(`CMS MCP upsert failed (${status ?? "network"})`, [detail]);
+    }
   }
 
   // 3. Named agents -----------------------------------------------------------
@@ -89,20 +144,31 @@ async function main() {
     try {
       await client.agents.create({ name: def.name, manifest: def.manifest });
       console.log(`✓ created agent ${def.name}`);
-    } catch {
-      // Name already taken → update in place (names are immutable).
-      const { data } = await client.agents.list();
-      const existing = data.find((a) => a.name === def.name);
-      if (!existing) throw new Error(`could not create or find agent ${def.name}`);
-      await client.agents.update(existing.id, { manifest: def.manifest });
-      console.log(`✓ updated agent ${def.name}`);
+    } catch (createErr) {
+      const { status, detail } = describeError(createErr);
+      if (status !== 409) {
+        fail(`creating agent ${def.name} failed (${status ?? "network"})`, [
+          detail,
+          'If the error says "Unknown model", set MODEL_FQN to a model that exists under Settings → Models.',
+        ]);
+      }
+      try {
+        const { data } = await client.agents.list();
+        const existing = data.find((a) => a.name === def.name);
+        if (!existing) throw new Error("not found after 409");
+        await client.agents.update(existing.id, { manifest: def.manifest });
+        console.log(`✓ updated agent ${def.name}`);
+      } catch (updateErr) {
+        const u = describeError(updateErr);
+        fail(`updating agent ${def.name} failed (${u.status ?? "network"})`, [u.detail]);
+      }
     }
   }
 
-  console.log("Seed complete.");
+  console.log("\nSeed complete.");
 }
 
-main().catch((err) => {
-  console.error("Seed failed:", err instanceof Error ? err.message : err);
-  process.exit(1);
+main().catch((err: unknown) => {
+  const e = err as { message?: string; cause?: { code?: string } };
+  fail(e.message ?? String(err), e.cause?.code ? [`network cause: ${e.cause.code}`] : []);
 });

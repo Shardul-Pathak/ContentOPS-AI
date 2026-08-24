@@ -3,7 +3,8 @@ import type { TrueForgeApi } from "@truefoundry/trueforge-sdk";import {
   assetSetSchema,
   contentStrategySchema,
   jsonSchemaFor,
-  qualityReviewSchema,
+  publishPayloadSchema,
+  qualityReviewResponseSchema,
   researchResultSchema,
 } from "@/contracts/artifacts";
 
@@ -187,7 +188,7 @@ const schemas = {
   research: researchResultSchema,
   growth: contentStrategySchema,
   writer: articleDraftSchema,
-  quality: qualityReviewSchema,
+  quality: qualityReviewResponseSchema,
   image: assetSetSchema,
   publisher: null,
 } as const;

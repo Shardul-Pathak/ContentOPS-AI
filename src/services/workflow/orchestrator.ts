@@ -3,6 +3,7 @@ import {
   articleDraftSchema,
   assetSetSchema,
   contentStrategySchema,
+  parseQualityReviewOutput,
   publishPayloadSchema,
   qualityReviewSchema,
   researchResultSchema,
@@ -66,7 +67,9 @@ const validators: Partial<Record<AgentRole, (text: string) => unknown>> = {
   research: zodOutputParser(researchResultSchema),
   growth: zodOutputParser(contentStrategySchema),
   writer: zodOutputParser(articleDraftSchema),
-  quality: zodOutputParser(qualityReviewSchema),
+  // Quality output may arrive enveloped ({ "review": ... }) or bare — the
+  // envelope is required by OpenAI-compatible response_format constraints.
+  quality: parseQualityReviewOutput,
   image: zodOutputParser(assetSetSchema),
   publisher: zodOutputParser(publishPayloadSchema),
 };
@@ -98,7 +101,7 @@ async function runStage<A>(
   role: AgentRole,
   statusDuringStage: WorkflowStatus,
   prompt: string,
-  validateOutput: (text: string) => A,
+  validateOutput: (text: string) => A | null,
 ): Promise<StageOutcome<A>> {
   const { contentId, runtime } = ctx;
 
@@ -353,7 +356,7 @@ export async function runWorkflow(
           `Strategy: ${JSON.stringify(strategyOutcome.artifact)}`,
           `Draft:\n${JSON.stringify(draft)}`,
         ].join("\n\n"),
-        (t): QualityReview => qualityReviewSchema.parse(JSON.parse(t)) as QualityReview,
+        (t) => parseQualityReviewOutput(t),
       );
       const review = reviewResult.artifact;
       await prisma.content.update({
