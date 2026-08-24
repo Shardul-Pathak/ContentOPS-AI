@@ -64,6 +64,7 @@ interface StageContext {
 interface StageOutcome<T> {
   artifact: T;
   runId: string;
+  activity: ActivityItem[];
 }
 
 const validators: Partial<Record<AgentRole, (text: string) => unknown>> = {
@@ -171,7 +172,7 @@ async function runStage<A>(
         finishedAt: new Date(),
       },
     });
-    return { artifact, runId: run.id };
+    return { artifact, runId: run.id, activity: result.activity };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await prisma.agentRun.update({
@@ -284,10 +285,19 @@ export async function runWorkflow(
       data: { research: asJson(researchOutcome.artifact) },
     });
 
+    // Tool-use gate (AGENTS.md sections 4.3/23): sources claimed without a
+    // single search-tool call are hallucinations — refuse them outright.
+    const r = researchOutcome.artifact;
+    const searchCalls = researchOutcome.activity.filter((a) => a.type === "tool_response").length;
+    if (searchCalls === 0 && r.sources.length > 0) {
+      throw new WorkflowError(
+        `Research cited ${r.sources.length} sources without performing any search tool calls — refusing unverifiable citations.`,
+      );
+    }
+
     // Evidence gate (AGENTS.md section 4.3): honest limitations are fine, but
     // a run with zero usable evidence would only produce a fabricated-feeling
     // article downstream — stop here instead of writing one.
-    const r = researchOutcome.artifact;
     if (
       r.sources.length === 0 &&
       r.keyPoints.length === 0 &&

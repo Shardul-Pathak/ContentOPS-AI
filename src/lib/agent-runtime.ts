@@ -288,6 +288,8 @@ export interface MockScriptEntry {
   failSessionOrdinals?: number[];
   /** Fail resumeAfterApproval (the post-approval gated execution). */
   failResume?: boolean;
+  /** Emit no tool activity — used to test the fabricated-citation gate. */
+  suppressActivity?: boolean;
 }
 
 export class MockAgentRuntime implements AgentRuntime {
@@ -365,6 +367,18 @@ export class MockAgentRuntime implements AgentRuntime {
       };
     }
     const overridden = script.overrideOutputText?.(ctx, content);
+    if (script.suppressActivity) {
+      return {
+        status: "done",
+        outputText: overridden ?? JSON.stringify(fixtureOutput(role, content)),
+        pendingApprovals: [],
+        activity: [],
+        sessionId,
+        turnId: `${sessionId}-turn-${callIndex}`,
+        lastSequenceNumber: 1,
+      };
+    }
+    emit({ type: "tool_response", detail: "(mock)" });
     return {
       status: "done",
       outputText: overridden ?? JSON.stringify(fixtureOutput(role, content)),
