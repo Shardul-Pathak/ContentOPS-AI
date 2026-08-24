@@ -2,7 +2,7 @@
   "name": "content-ops-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "Autonomous AI content operations platform — TrueForge-first multi-agent content workflow",
+  "description": "Autonomous AI content operations platform \u2014 TrueForge-first multi-agent content workflow",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -13,11 +13,14 @@
     "lint": "eslint .",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "seed:agents": "tsx scripts/seed-agents.ts"
+    "seed:agents": "tsx scripts/seed-agents.ts",
+    "mock:cms": "node scripts/mock-cms-server.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@prisma/client": "^6.5.0",
     "@truefoundry/trueforge-sdk": "^0.1.3",
+    "express": "^4.22.2",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

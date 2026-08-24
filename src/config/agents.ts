@@ -158,13 +158,25 @@ Output only JSON matching the required schema.`;
 // Names refer to servers configured in TrueForge Settings (seed script / UI).
 
 const RESEARCH_MCP_SERVER_NAME = process.env.RESEARCH_MCP_SERVER_NAME ?? "";
-const CMS_MCP_SERVER_NAME = process.env.CMS_MCP_SERVER_NAME ?? "";
+const CMS_MCP_SERVER_NAME = process.env.CMS_MCP_SERVER_NAME ?? "content-cms";
 
 function mcpServers(role: AgentRole): TrueForgeApi.McpServer[] {
   switch (role) {
     case "research":
       return RESEARCH_MCP_SERVER_NAME
         ? [{ name: RESEARCH_MCP_SERVER_NAME, enableTools: ["@read-only"] }]
+        : [];
+    case "publisher":
+      // The gated publish tool is THE human control boundary (§17): the
+      // harness pauses before publish_article until an explicit decision.
+      return CMS_MCP_SERVER_NAME
+        ? [
+            {
+              name: CMS_MCP_SERVER_NAME,
+              enableTools: ["@all"],
+              requireApprovalForTools: ["publish_article"],
+            },
+          ]
         : [];
     default:
       return [];

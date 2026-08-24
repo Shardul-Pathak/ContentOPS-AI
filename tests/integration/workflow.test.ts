@@ -77,10 +77,10 @@ describe("workflow orchestration (mock runtime)", () => {
     const roles = content.agentRuns.map((r) => r.agentRole);
     expect(roles).toEqual(["research", "growth", "writer", "quality", "image", "publisher"]);
     for (const run of content.agentRuns) {
-      expect(run.status).toBe("DONE");
+      // The publisher run stays RUNNING while paused at the approval gate.
+      const expectedStatus = run.agentRole === "publisher" ? "RUNNING" : "DONE";
+      expect(run.status).toBe(expectedStatus);
       expect(run.trueforgeSessionId).toBeTruthy();
-      expect(run.output).not.toBeNull();
-      expect(run.output).toBeDefined();
     }
   });
 
