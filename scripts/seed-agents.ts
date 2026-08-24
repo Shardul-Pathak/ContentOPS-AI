@@ -13,7 +13,16 @@
  * Usage: npm run seed:agents   (requires a running TrueForge server)
  */
 import { TrueForge } from "@truefoundry/trueforge-sdk";
-import { agentDefinitions } from "../src/config/agents";
+
+// tsx/npm do not auto-load .env — do it explicitly (Node >= 20.6).
+// Must run BEFORE config modules are imported: they read env lazily now,
+// but keeping this first makes ordering obvious.
+try {
+  process.loadEnvFile();
+} catch {
+  /* no .env file — rely on ambient environment */
+}
+
 
 function fail(message: string, hints: string[] = []): never {
   console.error(`\n✗ ${message}`);
@@ -31,6 +40,9 @@ function describeError(err: unknown): { status?: number; detail: string } {
 }
 
 async function main() {
+  // Import AFTER loadEnvFile: config/agents reads env-derived values.
+  const { agentDefinitions } = await import("../src/config/agents");
+
   const baseUrl = process.env.TRUEFORGE_BASE_URL ?? "http://localhost:8790";
   console.log(`Seeding TrueForge at ${baseUrl}`);
 
@@ -67,7 +79,21 @@ async function main() {
     upstreamModel && providerName
       ? `${providerName}/${registryModelName(upstreamModel)}`
       : undefined;
-  const modelFqn = process.env.MODEL_FQN ?? derivedFqn;
+  // When the provider + upstream pair is configured here, the derived FQN is
+  // authoritative — a hand-written MODEL_FQN with different hyphenation than
+  // the registered model name would 422 on agents.create.
+  if (
+    derivedFqn &&
+    process.env.MODEL_FQN &&
+    process.env.MODEL_FQN !== derivedFqn
+  ) {
+    console.warn(
+      `• ignoring MODEL_FQN="${process.env.MODEL_FQN}" — using "${derivedFqn}" derived from MODEL_PROVIDER_NAME + MODEL_UPSTREAM_MODEL. Remove the MODEL_FQN line to silence this.`,
+    );
+  }
+  const modelFqn = derivedFqn ?? process.env.MODEL_FQN;
+  // Publish the authoritative FQN for downstream modules (config/agents).
+  if (modelFqn) process.env.MODEL_FQN = modelFqn;
 
   if (!modelFqn) {
     fail(
