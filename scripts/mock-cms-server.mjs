@@ -14,6 +14,13 @@ import express from "express";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
+// Plain `node script.mjs` does not load .env either (Node >= 20.6 API).
+try {
+  process.loadEnvFile();
+} catch {
+  /* no .env file */
+}
+
 const PORT = Number(process.env.MOCK_CMS_PORT ?? 3780);
 const REQUIRED_TOKEN = process.env.CMS_MCP_HEADER_TOKEN ?? "local-dev-cms-token";
 

@@ -6,6 +6,13 @@
  */
 import { TrueForge } from "@truefoundry/trueforge-sdk";
 
+// tsx/npm do not auto-load .env — load explicitly without overriding real env.
+try {
+  process.loadEnvFile();
+} catch {
+  /* no .env file */
+}
+
 async function main() {
   const baseUrl = process.env.TRUEFORGE_BASE_URL ?? "http://localhost:8790";
   const client = new TrueForge({ baseUrl, timeoutInSeconds: 60 });

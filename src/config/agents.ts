@@ -39,13 +39,22 @@ export const AGENT_NAMES: Record<AgentRole, string> = {
   publisher: "content-publisher-agent",
 };
 
-export const RESPONSE_FORMAT_MODE = (process.env.RESPONSE_FORMAT_MODE ?? "json_schema") as
-  | "json_schema"
-  | "json_object"
-  | "text";
+// Read lazily: scripts load .env / derive values at runtime, and freezing
+// them at module-import time produced stale "custom/default-model" models.
+export function responseFormatMode(): "json_schema" | "json_object" | "text" {
+  return (process.env.RESPONSE_FORMAT_MODE ?? "json_schema") as
+    | "json_schema"
+    | "json_object"
+    | "text";
+}
+
+function modelFqnValue(): string {
+  return process.env.MODEL_FQN ?? "custom/default-model";
+}
 
 function responseFormat(schema: Parameters<typeof jsonSchemaFor>[0], role: AgentRole): TrueForgeApi.ResponseFormat {
-  if (RESPONSE_FORMAT_MODE === "json_schema") {
+  const mode = responseFormatMode();
+  if (mode === "json_schema") {
     return {
       type: "json_schema",
       jsonSchema: {
@@ -54,13 +63,12 @@ function responseFormat(schema: Parameters<typeof jsonSchemaFor>[0], role: Agent
       },
     };
   }
-  if (RESPONSE_FORMAT_MODE === "json_object") {
+  if (mode === "json_object") {
     return { type: "json_object" };
   }
   return { type: "text" };
 }
 
-const MODEL_FQN = process.env.MODEL_FQN ?? "custom/default-model";
 
 // Optional enhancement (decision: sandbox/skills must never block the core
 // workflow). Skills are git-backed SKILL.md packs and require a sandbox.
@@ -207,7 +215,7 @@ export function agentDefinitions(): AgentDefinition[] {
     const schema = schemas[role];
     const sandboxEnabled = ENABLE_SANDBOX && role === "writer";
     const manifest: TrueForgeApi.AgentSpec = {
-      model: { name: MODEL_FQN },
+      model: { name: modelFqnValue() },
       instructions: instructions[role],
       mcpServers: mcpServers(role),
       config: {
@@ -221,7 +229,7 @@ export function agentDefinitions(): AgentDefinition[] {
     if (sandboxEnabled && WRITER_SKILLS.length > 0) {
       manifest.skills = WRITER_SKILLS.map((name) => ({ name }));
     }
-    if (schema && RESPONSE_FORMAT_MODE !== "text") {
+    if (schema && responseFormatMode() !== "text") {
       manifest.responseFormat = responseFormat(schema, role);
     }
     return { name: AGENT_NAMES[role], manifest };
