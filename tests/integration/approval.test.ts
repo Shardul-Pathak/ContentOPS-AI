@@ -53,7 +53,8 @@ describe("human approval gate", () => {
     expect(summary.slug).toMatch(/^[a-z0-9-]+$/);
     expect(summary.metaDescription).toBeTruthy();
     expect(summary.assetCount).toBeGreaterThan(0);
-    expect(summary.externalAction).toContain("POST");
+    expect(approval?.destination).toContain("publish_article");
+    expect(summary.externalAction).toContain("publish_article");
   });
 
   it("approving publishes exactly once and stores the published URL", async () => {
@@ -120,9 +121,9 @@ describe("human approval gate", () => {
   it("publishing failure lands in FAILED with the real error", async () => {
     const contentId = await runToAwaitingApproval();
 
-    // Execute session fails (every publisher session of this runtime fails).
+    // The resumed gated execution fails.
     const failingRuntime = new MockAgentRuntime((role) =>
-      role === "publisher" ? { failSessionOrdinals: [1, 2] } : {},
+      role === "publisher" ? { failResume: true } : {},
     );
 
     await expect(decideApproval(contentId, "approve", failingRuntime)).rejects.toThrow(

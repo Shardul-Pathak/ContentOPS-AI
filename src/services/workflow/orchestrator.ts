@@ -422,29 +422,72 @@ export async function runWorkflow(
       });
     }
 
-    // --- PUBLICATION PREPARATION + APPROVAL GATE -----------------------------
-    // The workflow stops here by design: an external action may only execute
-    // after an explicit human approval recorded on the pending row (§17).
+    // --- PUBLICATION + APPROVAL GATE -----------------------------------------
+    // The publisher prepares AND submits via its tools; the gated publish tool
+    // pauses the turn (TrueForge HITL). Execution only happens later through
+    // decideApproval() resuming THIS session with the human's decision (§17).
     await setStatus(contentId, "AWAITING_APPROVAL", "publisher");
     const assets = await prisma.asset.findMany({ where: { contentId } });
-    const prepareOutcome = await runStage<PublishPayload>(
-      ctx,
-      "publisher",
-      "AWAITING_APPROVAL",
+    const publisherRun = await prisma.agentRun.create({
+      data: { contentId, agentRole: "publisher", attempt: 1, status: "RUNNING" },
+    });
+
+    const sessionId = await runtime.createSessionId("publisher");
+    const result = await runtime.runUserMessage(
+      sessionId,
       [
-        "PREPARE the publication payload for the approved article. Do NOT publish — preparation only. Return ONLY JSON matching the required schema.",
-        `Destination: configured company blog endpoint`,
-        `Article title: ${lastDraft?.title ?? content.topic}\nSlug: ${lastDraft?.slug ?? ""}\nMeta description: ${lastDraft?.metaDescription ?? ""}`,
+        "Prepare and submit this article for publication using your tools.",
+        `Article title: ${lastDraft?.title ?? content.topic}`,
+        `Slug: ${lastDraft?.slug ?? ""}`,
+        `Meta description: ${lastDraft?.metaDescription ?? ""}`,
         `Assets prepared: ${assets.length}`,
+        "The final publish tool call is gated by human approval. When the turn pauses at that gate, stop and wait.",
       ].join("\n\n"),
-      (t): PublishPayload => publishPayloadSchema.parse(JSON.parse(t)) as PublishPayload,
     );
+
+    if (result.pendingApprovals.length === 0 || !result.turnId) {
+      // Safety invariant: publishing must NEVER proceed without a gate.
+      await prisma.agentRun.update({
+        where: { id: publisherRun.id },
+        data: {
+          status: "FAILED",
+          error: "publisher finished without pausing at the approval gate",
+          trueforgeSessionId: sessionId,
+          finishedAt: new Date(),
+        },
+      });
+      throw new WorkflowError("Publisher did not pause at the approval gate — refusing to proceed");
+    }
+
+    const pending = result.pendingApprovals[0];
+    await prisma.agentRun.update({
+      where: { id: publisherRun.id },
+      data: {
+        trueforgeSessionId: sessionId,
+        trueforgeTurnId: result.turnId,
+        lastSequenceNumber: result.lastSequenceNumber,
+        activity: asJson(result.activity),
+        metrics: result.metrics ? asJson(result.metrics) : undefined,
+      },
+    });
     await prisma.approval.create({
       data: {
         contentId,
         status: "PENDING",
-        destination: prepareOutcome.artifact.destination,
-        payloadSummary: asJson(prepareOutcome.artifact),
+        destination: `${pending.toolName ?? "publish_article"} @ company blog`,
+        payloadSummary: asJson({
+          destination: "company-blog",
+          title: lastDraft?.title ?? content.topic,
+          slug: lastDraft?.slug ?? "",
+          metaDescription: lastDraft?.metaDescription ?? "",
+          assetCount: assets.length,
+          externalAction:
+            `${pending.toolName ?? "publish_article"}(${pending.argsPreview ?? "{}"}) — publishes the article to the configured company endpoint`,
+        }),
+        tfSessionId: sessionId,
+        tfTurnId: result.turnId,
+        toolCallId: pending.toolCallId,
+        threadId: pending.threadId,
       },
     });
     await setStatus(contentId, "AWAITING_APPROVAL", null);

@@ -37,10 +37,19 @@ export interface TurnResult {
   lastSequenceNumber: number;
 }
 
+export interface ResumeDecision {
+  threadId: string;
+  toolCallId: string;
+  allow: boolean;
+  reason?: string;
+}
+
 export interface AgentRuntime {
   readonly provider: string;
   createSessionId(role: AgentRole): Promise<string>;
   runUserMessage(sessionId: string, content: string): Promise<TurnResult>;
+  /** Resume a turn paused at an approval gate with the human's decision(s). */
+  resumeAfterApproval(sessionId: string, decisions: ResumeDecision[]): Promise<TurnResult>;
 }
 
 // --- TrueForge implementation -----------------------------------------------
@@ -122,6 +131,61 @@ export class TrueForgeRuntime implements AgentRuntime {
 
     return (
       done ?? { status: "error", outputText: null, errorMessage: "stream ended without turn.done", pendingApprovals: [], activity, sessionId, turnId, lastSequenceNumber }
+    );
+  }
+
+  async resumeAfterApproval(sessionId: string, decisions: ResumeDecision[]): Promise<TurnResult> {
+    const events = new Map<string, TrueForgeApi.TurnStreamingEvent>();
+    const activity: ActivityItem[] = [];
+    let lastSequenceNumber = 0;
+    let turnId: string | undefined;
+    let done: Extract<TurnResult, { status: "done" | "cancelled" | "error" }> | null = null;
+
+    const stream = await this.client.sessions.createTurnStream(sessionId, {
+      input: decisions.map((d) => ({
+        type: "user.tool_approval" as const,
+        threadId: d.threadId,
+        toolCallId: d.toolCallId,
+        approval: d.allow ? { status: "allow" as const } : { status: "deny" as const, reason: d.reason },
+      })),
+    });
+
+    for await (const { data: event, id } of stream.withMetadata()) {
+      if (id != null && Number(id) > lastSequenceNumber) lastSequenceNumber = Number(id);
+      if (event.type === "turn.created") turnId = event.turnId;
+      if (isEventDelta(event)) {
+        const base = events.get(event.id);
+        if (base) mergeEventDelta(base, event);
+        continue;
+      }
+      events.set(event.id, event);
+      if (event.type === "tool.response") {
+        activity.push({ type: "tool_response", detail: truncate(String(event.content ?? ""), 160) });
+      } else if (event.type === "turn.done") {
+        const s = event.state;
+        if (s.status === "done") {
+          const outputMessage =
+            s.output && s.output.type === "model.message" ? s.output : mainThreadFinal(events);
+          done = {
+            status: "done",
+            outputText: extractText(outputMessage?.content ?? null),
+            pendingApprovals: collectApprovals(s.requiredActions ?? [], events),
+            activity,
+            sessionId,
+            turnId,
+            lastSequenceNumber,
+            metrics: normalizeMetrics(s.metrics),
+          };
+        } else if (s.status === "cancelled") {
+          done = { status: "cancelled", outputText: null, errorMessage: `cancelled: ${s.reason}`, pendingApprovals: [], activity, sessionId, turnId, lastSequenceNumber };
+        } else {
+          done = { status: "error", outputText: null, errorMessage: s.message, pendingApprovals: [], activity, sessionId, turnId, lastSequenceNumber };
+        }
+      }
+    }
+
+    return (
+      done ?? { status: "error", outputText: null, errorMessage: "resume stream ended without turn.done", pendingApprovals: [], activity, sessionId, turnId, lastSequenceNumber }
     );
   }
 }
@@ -211,6 +275,8 @@ export interface MockScriptEntry {
   failCallIndexes?: number[];
   /** Alternatively fail specific publisher sessions (1-based), e.g. execute-only. */
   failSessionOrdinals?: number[];
+  /** Fail resumeAfterApproval (the post-approval gated execution). */
+  failResume?: boolean;
 }
 
 export class MockAgentRuntime implements AgentRuntime {
@@ -242,8 +308,32 @@ export class MockAgentRuntime implements AgentRuntime {
     this.callsPerSession.set(sessionId, callIndex + 1);
     const sessionOrdinal = (this.sessionsByRole.get(role) ?? [sessionId]).indexOf(sessionId) + 1;
     const ctx: MockInvocationContext = { callIndex, sessionOrdinal };
-
     const script = this.scriptForRole(role, ctx);
+
+    // The publisher stage always simulates a TrueForge approval pause: the
+    // gated publish tool call stops the turn before any external action.
+    if (role === "publisher") {
+      return {
+        status: "done",
+        outputText: null,
+        pendingApprovals: [
+          {
+            kind: "tool_approval",
+            threadId: "main",
+            toolCallId: `mock-call-publish-${sessionOrdinal}`,
+            sourceEventId: `${sessionId}-msg`,
+            toolName: "publish_article",
+            argsPreview: JSON.stringify({ draftId: `mock-draft-${sessionOrdinal}` }),
+          },
+        ],
+        activity: [{ type: "tool_response", detail: "prepare_draft/upload_asset (mock)" }],
+        sessionId,
+        turnId: `${sessionId}-turn-${callIndex}`,
+        lastSequenceNumber: 3,
+        metrics: { totalTokens: 1000, totalCostUsd: 0.001 },
+      };
+    }
+
     if (script.failCallIndexes?.includes(callIndex) || script.failSessionOrdinals?.includes(sessionOrdinal)) {
       return {
         status: "error",
@@ -266,6 +356,44 @@ export class MockAgentRuntime implements AgentRuntime {
       turnId: `${sessionId}-turn-${callIndex}`,
       lastSequenceNumber: 2,
       metrics: { totalTokens: 1000, totalCostUsd: 0.001 },
+    };
+  }
+
+  async resumeAfterApproval(sessionId: string, decisions: ResumeDecision[]): Promise<TurnResult> {
+    const role = sessionIdToRole(sessionId);
+    const script = this.scriptForRole(role, { callIndex: 0, sessionOrdinal: 1 });
+    if (script.failResume) {
+      return {
+        status: "error",
+        outputText: null,
+        errorMessage: "mock publish_article execution failed",
+        pendingApprovals: [],
+        activity: [],
+        sessionId,
+        turnId: `${sessionId}-turn-resumed`,
+        lastSequenceNumber: 2,
+      };
+    }
+    const allAllowed = decisions.every((d) => d.allow);
+    if (role === "publisher" && allAllowed) {
+      return {
+        status: "done",
+        outputText: JSON.stringify(fixtureOutput("publisher", "EXECUTE")),
+        pendingApprovals: [],
+        activity: [{ type: "tool_response", detail: "publish_article executed (mock)" }],
+        sessionId,
+        turnId: `${sessionId}-turn-resumed`,
+        lastSequenceNumber: 5,
+      };
+    }
+    return {
+      status: "done",
+      outputText: JSON.stringify({ denied: true }),
+      pendingApprovals: [],
+      activity: [{ type: "tool_response", detail: "publish_article denied" }],
+      sessionId,
+      turnId: `${sessionId}-turn-denied`,
+      lastSequenceNumber: 3,
     };
   }
 }

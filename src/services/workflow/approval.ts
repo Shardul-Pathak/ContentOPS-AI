@@ -5,6 +5,7 @@ import {
   publishResultSchema,
   type PublishResult,
 } from "@/contracts/artifacts";
+import type { Prisma } from "@prisma/client";
 import { nextStatus, type WorkflowStatus } from "@/domain/state-machine";
 import { NotFoundError } from "@/services/companies";
 import { getAgentRuntime } from "@/services/workflow/orchestrator";
@@ -20,6 +21,10 @@ export class ApprovalConflictError extends Error {
     super(message);
     this.name = "ApprovalConflictError";
   }
+}
+
+function asJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
 export const decisionSchema = z.object({ decision: z.enum(["approve", "reject"]) });
@@ -64,25 +69,35 @@ export async function decideApproval(
     return { status: "CANCELLED" };
   }
 
-  // --- APPROVED: execute the exact approved payload -------------------------
+  // --- APPROVED: resume the exact paused tool call --------------------------
   await prisma.content.update({
     where: { id: contentId },
     data: { status: nextStatus(content.status as WorkflowStatus, { type: "APPROVED" }), currentAgent: "publisher" },
   });
 
+  if (!approval.tfSessionId || !approval.toolCallId) {
+    await prisma.content.update({
+      where: { id: contentId },
+      data: {
+        status: nextStatus("PUBLISHING", { type: "PUBLISH_FAILED" }),
+        failureReason: "Approval row lacks TrueForge pause references — cannot resume safely",
+        currentAgent: null,
+      },
+    });
+    throw new ApprovalConflictError("Approval row has no paused session reference");
+  }
+
   const payload = publishPayloadSchema.parse(approval.payloadSummary);
 
   try {
     const runtime = runtimeOverride ?? getAgentRuntime();
-    const sessionId = await runtime.createSessionId("publisher");
-    const result = await runtime.runUserMessage(
-      sessionId,
-      [
-        "EXECUTE the approved publication now. Return ONLY JSON with the result.",
-        `Approved destination: ${payload.destination}`,
-        `Article: ${payload.title} (${payload.slug})`,
-      ].join("\n"),
-    );
+    const result = await runtime.resumeAfterApproval(approval.tfSessionId, [
+      {
+        threadId: approval.threadId ?? "main",
+        toolCallId: approval.toolCallId,
+        allow: true,
+      },
+    ]);
 
     let parsed: PublishResult | null = null;
     if (result.status === "done" && result.outputText) {
@@ -96,6 +111,15 @@ export async function decideApproval(
       throw new Error(`publishing agent did not return a valid result: ${result.errorMessage ?? "unparseable"}`);
     }
 
+    await prisma.agentRun.updateMany({
+      where: { contentId, agentRole: "publisher", status: "RUNNING" },
+      data: {
+        status: "DONE",
+        output: asJson(parsed),
+        activity: asJson(result.activity),
+        finishedAt: new Date(),
+      },
+    });
     await prisma.content.update({
       where: { id: contentId },
       data: {
@@ -107,6 +131,10 @@ export async function decideApproval(
     return { status: "PUBLISHED", publishedUrl: parsed.publishedUrl };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    await prisma.agentRun.updateMany({
+      where: { contentId, agentRole: "publisher", status: "RUNNING" },
+      data: { status: "FAILED", error: message, finishedAt: new Date() },
+    });
     await prisma.content.update({
       where: { id: contentId },
       data: {

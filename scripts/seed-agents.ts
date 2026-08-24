@@ -65,6 +65,25 @@ async function main() {
     console.log(`• using catalog MCP server "${researchMcpName}" — ensure it is connected in Settings → Connectors`);
   }
 
+  // 2b. CMS MCP server (the gated publishing destination)
+  const cmsMcpName = process.env.CMS_MCP_SERVER_NAME;
+  const cmsMcpUrl = process.env.CMS_MCP_URL;
+  if (cmsMcpName && cmsMcpUrl) {
+    await client.settings.mcpServers.createOrUpdate({
+      manifest: {
+        type: "remote",
+        name: cmsMcpName,
+        url: cmsMcpUrl,
+        description: "Company blog CMS — publish_article is approval-gated",
+        auth: {
+          type: "header",
+          headers: { Authorization: `Bearer ${process.env.CMS_MCP_HEADER_TOKEN ?? ""}` },
+        },
+      },
+    });
+    console.log(`✓ CMS MCP server "${cmsMcpName}" upserted (${cmsMcpUrl})`);
+  }
+
   // 3. Named agents -----------------------------------------------------------
   for (const def of agentDefinitions()) {
     try {
