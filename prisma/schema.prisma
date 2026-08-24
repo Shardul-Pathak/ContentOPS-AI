@@ -6,3 +6,26 @@ datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }
+
+model Company {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  website     String?
+  industry    String?
+  // Structured context sections (AGENTS.md section 7). SQLite has no scalar
+  // lists, so object/array sections are stored as JSON and validated with Zod
+  // at the service boundary before persistence.
+  products         Json?
+  audience         Json?
+  brand            Json?
+  marketing        Json?
+  competitors      Json?
+  allowedClaims    Json?
+  prohibitedClaims Json?
+  contentTypes     Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("companies")
+}
