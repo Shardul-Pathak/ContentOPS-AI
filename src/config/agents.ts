@@ -61,6 +61,14 @@ function responseFormat(schema: Parameters<typeof jsonSchemaFor>[0], role: Agent
 
 const MODEL_FQN = process.env.MODEL_FQN ?? "custom/default-model";
 
+// Optional enhancement (decision: sandbox/skills must never block the core
+// workflow). Skills are git-backed SKILL.md packs and require a sandbox.
+const ENABLE_SANDBOX = process.env.ENABLE_SANDBOX === "true";
+const WRITER_SKILLS = (process.env.WRITER_SKILLS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const baseConfig: TrueForgeApi.RuntimeConfig = {
   generativeUi: { enabled: false },
   askUserQuestions: { enabled: false },
@@ -184,6 +192,7 @@ const instructions: Record<AgentRole, string> = {
 export function agentDefinitions(): AgentDefinition[] {
   return AGENT_ROLES.map((role) => {
     const schema = schemas[role];
+    const sandboxEnabled = ENABLE_SANDBOX && role === "writer";
     const manifest: TrueForgeApi.AgentSpec = {
       model: { name: MODEL_FQN },
       instructions: instructions[role],
@@ -193,8 +202,12 @@ export function agentDefinitions(): AgentDefinition[] {
         // Research benefits from parallel fan-out across subtopics (verified:
         // dynamic subagents share tools/sandbox, run one level deep).
         dynamicSubAgents: { enabled: role === "research" },
+        ...(sandboxEnabled ? { sandbox: { enabled: true } } : {}),
       },
     };
+    if (sandboxEnabled && WRITER_SKILLS.length > 0) {
+      manifest.skills = WRITER_SKILLS.map((name) => ({ name }));
+    }
     if (schema && RESPONSE_FORMAT_MODE !== "text") {
       manifest.responseFormat = responseFormat(schema, role);
     }
