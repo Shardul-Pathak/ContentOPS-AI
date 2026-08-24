@@ -4,46 +4,30 @@
 Autonomous Content Operations Platform (TrueForge-first)
 
 ## Current Branch
-main
+main — MVP COMPLETE (all 12 milestones merged, working tree clean)
 
-## Current Task
-F0–F9 COMPLETE and merged (60/60 tests green). Next: F10 publishing-approval → F11 cms-publishing → F12 end-to-end-workflow. These are the SAFETY-CRITICAL milestones; give them a full context window.
+## Final State
+- 66/66 tests green · lint/typecheck/build clean · HTTP-level e2e smoke verified
+- Full pipeline: company → campaign → workflow → research(provenance) → strategy → draft → review → revision loop (MAX 3) → hero asset → publisher pauses at gated tool → human approve/reject → PUBLISHED/CANCELLED
+- Critical paths proven live over HTTP: PASS path, APPROVE→PUBLISHED (+409 double submit), REJECT→CANCELLED (+409 late approve); REVISION/MAX_REVISION/PUBLISH_FAILURE covered by vitest integration suite
 
-## Completed Work (merge commits)
-- F0 bootstrap: `a1e041e` docs+agents · `7e8d76e` scaffold
-- F1 company-context `c8c16c4` · F2 campaign-management `bf50826` · docs `db391dc`
-- F3 trueforge-foundation `d6b7925` · F4 research-agent `8f0a1c5-ish` (feea112) · F5 growth-agent · F6 writer-agent · F7 quality-agent · F8 revision-workflow `78ca33b` · F9 image-generation (+ fix 9051b11)
-- Verification before every merge: lint + typecheck + vitest + next build all green (currently 13 files / 60 tests)
+## Key Commits (merge nodes)
+d6b7925 F3 foundation · e0cc171 F4 · bf6defc F5 · 7dda5af F6 · 7abdb31 F7 · 78ca33b F8 · 7a3f420 F9 · 81fb4f7 F10 approval gate · 445e6c7 F11 cms-publishing · a816561 F12 mvp complete
 
-## What Exists Now (architecture snapshot)
-- Stack: Next.js 15.5 App Router + Prisma 6/SQLite + Zod + Vitest + Tailwind 4; TrueForge SDK `@truefoundry/trueforge-sdk@0.1.3`
-- Domain types of SDK live under `TrueForgeApi.*` namespace; wire fields camelCase in TS (`requiredActions`, not `required_actions`)
-- `src/domain/state-machine.ts`: §20 states, MAX_REVISIONS=3, REVIEW_FAIL→REVISING/<limit else REQUIRES_HUMAN_INTERVENTION
-- `src/config/agents.ts`: 6 named agents; response_format json_schema via zod-to-json-schema (`RESPONSE_FORMAT_MODE`); research MCP env-driven (`RESEARCH_MCP_SERVER_NAME[_URL]`, type "remote", header auth Record<string,string>); writer sandbox+skills ONLY when ENABLE_SANDBOX=true && WRITER_SKILLS set (Daytona optional per owner decision)
-- `src/lib/agent-runtime.ts`: AgentRuntime port = TrueForgeRuntime (streaming, delta merge, approval collection from turn.done.state.requiredActions → PendingApproval{toolCallId,threadId,sourceEventId,toolName,argsPreview}, metrics cost) + MockAgentRuntime (fixtures, overrideOutputText/failCallIndexes scripting, recordedPrompts[] for prompt assertions)
-- `src/services/workflow/orchestrator.ts`: startWorkflow→202/background runWorkflow; VALIDATING gate (audience required); stages persist artifacts; ResearchSource rows; Asset rows (assets JSON blob REMOVED — API maps assetRows→`assets` array); revision loop caps count at MAX_REVISIONS (writer runs = 1+N when escalating at 3rd FAIL... precisely: FAILs 1..3 → REVISING rewrites, 4th consecutive FAIL escalates with revisionCount=3); stops at AWAITING_APPROVAL
-- APIs: `/api/companies*`, `/api/campaigns*`, POST/GET `/api/campaigns/[id]/contents`, GET `/api/contents/[id]`; UI pages /companies, /campaigns, /campaigns/[id] (start workflow), /content/[id] (polling timeline)
-- DB models: Company, Campaign, Content(status/currentAgent/revisionCount/failureReason/research/strategy/draft/qualityReview), ResearchSource, AgentRun(tfSessionId/tfTurnId/lastSequenceNumber/activity/output/metrics), Asset
-- `scripts/seed-agents.ts` (npm run seed:agents): upserts provider + MCP + agents idempotently
+## Architecture (final)
+- TrueForge = agent harness: 6 named agents (seeded by `npm run seed:agents`), sessions/turns/events, approval pauses via requireApprovalForTools:["publish_article"], resume via user.tool_approval turns; SDK @truefoundry/trueforge-sdk@0.1.3 (types under TrueForgeApi.*)
+- App = business states (`src/domain/state-machine.ts`), Zod contracts (`src/contracts/`), orchestrator + approval service (`src/services/workflow/`), AgentRuntime port with TrueForge+Mock providers (`src/lib/agent-runtime.ts`)
+- Mock CMS: real MCP server `scripts/mock-cms-server.mjs` (npm run mock:cms, :3780/mcp, header auth, idempotency on publish_article) — registered into TF by seed when CMS_MCP_URL set
+- Publisher flow: stage submits → turn PAUSES at gated call → Approval row stores tfSessionId/tfTurnId/toolCallId/threadId + frozen payload summary → decideApproval() resumes THAT session; no pause ⇒ workflow FAILED (safety invariant)
+- AGENT_PROVIDER=mock mirrors the identical state machine for offline demo/tests
 
-## Architecture Decisions
-- App owns states/validation/sequencing; TrueForge owns execution/tools/HITL/resume
-- One TF session per agent stage; structured validated handoffs only
-- Approval is harness-gated tool pause + app-side Approval record; deny ⇒ CANCELLED; new action needs fresh approval
-- Sandbox/skills strictly optional (owner decision); never block core path
-- Branching per §28: feat|fix/* branches, --no-ff merges, delete after merge
+## Running the demo
+See README "Demo walkthrough". Prereqs: .env from example; trueforge mode needs model key + running TF server + seed.
 
-## Known Issues
-- ESLint via FlatCompat bridge; npm 12 needs install-scripts approve (@prisma/engines esbuild sharp)
-- Live TrueForge server never run in this env yet — everything verified against SDK types + mock runtime. FIRST TASK of F10 session: `npx @truefoundry/trueforge@latest` smoke + seed script against real server if a model key is available
-- MCP catalog contents (image-gen? Exa?) still unverified against a live server
+## Known Issues / Future Work
+- Live-server smoke against real TrueForge still pending (needs model API key in env): verify json_schema behavior of the chosen endpoint (fallback RESPONSE_FORMAT_MODE=json_object) and MCP catalog contents
+- ESLint via FlatCompat bridge; npm 12 install-scripts approval note in F0 commit
+- Deferred per plan: Google Workspace MCP, real image-gen MCP, hosted TF mode, SSE live streaming to browser (polling today)
 
-## Exact Next Steps (F10 feature/publishing-approval)
-1. Prisma: Approval model {id,contentId,status(pending/approved/rejected),destination,payloadSummary Json,tfsessionId,tfTurnId,toolCallId,threadId,decidedAt} + migration.
-2. Orchestrator: after image stage, do NOT just stop — publisher "prepare" step: build payload preview (title/slug/meta/assets/destination) → create Approval row (pending) → content AWAITING_APPROVAL.
-3. API: GET pending approval embedded in /api/contents/[id]; POST /api/contents/[id]/approval {decision:"approve"|"reject"}:
-   - approve → verify Approval row pending + content AWAITING_APPROVAL → send user.tool_approval {allow} to the paused TF turn (F10 can simulate execution with mock publisher fixture; real gated call lands F11) → PUBLISHING→PUBLISHED path; store published URL on PublishingJob or Content
-   - reject → user.tool_approval {deny} → CANCELLED; ensure no execution; double-submit idempotent (409 or no-op)
-4. UI: ApprovalPanel on /content/[id]: destination, payload summary, Allow/Deny buttons wired to API.
-5. Tests (mock runtime): approve-resumes-publishes-once; reject-cancels; stale approval cannot authorize different payload; double-submit protected; publish failure → FAILED.
-Then F11 feature/cms-publishing: in-repo MCP endpoint /api/mcp/cms (tools: prepare_draft, upload_asset, publish_article [gated via require_approval_for_tools in publisher agent spec], get_publication_status) + publisher agent wiring + idempotency key + verification. Then F12 e2e polish + README demo script.
+## Next Action if resuming
+Only optional enhancements remain. Suggested order: (1) live TF server smoke test with real key; (2) SSE proxy route for live timeline updates; (3) Google Workspace read-only connector as company-knowledge source.
