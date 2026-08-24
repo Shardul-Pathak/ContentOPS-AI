@@ -44,10 +44,13 @@ export interface ResumeDecision {
   reason?: string;
 }
 
+/** Receives notable harness events (tool calls, subagents) as they happen. */
+export type ActivitySink = (item: ActivityItem) => void;
+
 export interface AgentRuntime {
   readonly provider: string;
   createSessionId(role: AgentRole): Promise<string>;
-  runUserMessage(sessionId: string, content: string): Promise<TurnResult>;
+  runUserMessage(sessionId: string, content: string, onActivity?: ActivitySink): Promise<TurnResult>;
   /** Resume a turn paused at an approval gate with the human's decision(s). */
   resumeAfterApproval(sessionId: string, decisions: ResumeDecision[]): Promise<TurnResult>;
 }
@@ -77,9 +80,13 @@ export class TrueForgeRuntime implements AgentRuntime {
     return data.id;
   }
 
-  async runUserMessage(sessionId: string, content: string): Promise<TurnResult> {
+  async runUserMessage(sessionId: string, content: string, onActivity?: ActivitySink): Promise<TurnResult> {
     const events = new Map<string, TrueForgeApi.TurnStreamingEvent>();
     const activity: ActivityItem[] = [];
+    const emit = (item: ActivityItem) => {
+      activity.push(item);
+      onActivity?.(item);
+    };
     let lastSequenceNumber = 0;
     let turnId: string | undefined;
     let done: Extract<TurnResult, { status: "done" | "cancelled" | "error" }> | null = null;
@@ -100,11 +107,15 @@ export class TrueForgeRuntime implements AgentRuntime {
       events.set(event.id, event);
 
       if (event.type === "thread.created") {
-        activity.push({ type: "subagent_started", detail: event.title });
+        emit({ type: "subagent_started", detail: event.title });
+      } else if (event.type === "thread.done") {
+        emit({ type: "subagent_finished", detail: event.title });
       } else if (event.type === "tool.response") {
-        activity.push({ type: "tool_response", detail: truncate(String(event.content ?? ""), 160) });
+        emit({ type: "tool_response", detail: truncate(String(event.content ?? ""), 160) });
       } else if (event.type === "sandbox.created") {
-        activity.push({ type: "sandbox_created", detail: event.sandboxId });
+        emit({ type: "sandbox_created", detail: event.sandboxId });
+      } else if (event.type === "mcp.auth_required") {
+        emit({ type: "mcp_auth_required", detail: (event.mcpServers ?? []).map((m) => m.name).join(", ") });
       } else if (event.type === "turn.done") {
         const s = event.state;
         if (s.status === "done") {
@@ -300,9 +311,10 @@ export class MockAgentRuntime implements AgentRuntime {
     return sessionId;
   }
 
-  async runUserMessage(sessionId: string, content: string): Promise<TurnResult> {
+  async runUserMessage(sessionId: string, content: string, onActivity?: ActivitySink): Promise<TurnResult> {
     const role = sessionIdToRole(sessionId);
     this.recordedPrompts.push({ sessionId, role, content });
+    const emit = (item: ActivityItem) => onActivity?.(item);
 
     const callIndex = this.callsPerSession.get(sessionId) ?? 0;
     this.callsPerSession.set(sessionId, callIndex + 1);
@@ -313,6 +325,8 @@ export class MockAgentRuntime implements AgentRuntime {
     // The publisher stage always simulates a TrueForge approval pause: the
     // gated publish tool call stops the turn before any external action.
     if (role === "publisher") {
+      emit({ type: "tool_response", detail: "prepare_draft/upload_asset (mock)" });
+      emit({ type: "approval_pause", detail: `publish_article paused for approval (call ${sessionOrdinal})` });
       return {
         status: "done",
         outputText: null,
@@ -326,7 +340,10 @@ export class MockAgentRuntime implements AgentRuntime {
             argsPreview: JSON.stringify({ draftId: `mock-draft-${sessionOrdinal}` }),
           },
         ],
-        activity: [{ type: "tool_response", detail: "prepare_draft/upload_asset (mock)" }],
+        activity: [
+          { type: "tool_response", detail: "prepare_draft/upload_asset (mock)" },
+          { type: "approval_pause", detail: `publish_article paused for approval (call ${sessionOrdinal})` },
+        ],
         sessionId,
         turnId: `${sessionId}-turn-${callIndex}`,
         lastSequenceNumber: 3,
@@ -335,6 +352,7 @@ export class MockAgentRuntime implements AgentRuntime {
     }
 
     if (script.failCallIndexes?.includes(callIndex) || script.failSessionOrdinals?.includes(sessionOrdinal)) {
+      emit({ type: "error", detail: `simulated ${role} failure` });
       return {
         status: "error",
         outputText: null,

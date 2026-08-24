@@ -34,6 +34,16 @@ With `AGENT_PROVIDER=trueforge`, workflows execute through the real harness (MCP
 approval pauses, resumable streams). With `AGENT_PROVIDER=mock`, deterministic fixtures
 drive the identical workflow for offline development and tests.
 
+## Watching a run live
+
+- **App** — `/content/[id]` auto-refreshes every 2s: workflow step timeline, the
+  running agent with an elapsed timer, and live tool-call/subagent activity
+  streamed from the harness while the turn is still executing.
+- **TrueForge dashboard** — http://localhost:8790 → Sessions shows the raw
+  event stream: full tool arguments, tool results, subagent threads, token
+  usage. This is the deepest view of what the agents are doing right now.
+- **API** — `curl localhost:3000/api/contents/<id> | jq '.status, .currentAgent'`
+
 ## Demo walkthrough
 
 1. `npm run dev` → open http://localhost:3000
