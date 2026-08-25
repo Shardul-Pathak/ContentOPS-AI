@@ -30,6 +30,11 @@ See README "Demo walkthrough". Prereqs: .env from example; trueforge mode needs 
 - BLOCKER: nemotron-3-super-120b-a12b:free makes ZERO tool calls through OpenRouter routing even with schemas preloaded — returns empty research. Gates correctly fail-fast now.
 - Next: try MODEL_UPSTREAM_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free or paid nvidia/nemotron-3.5-lightning (~$0.0003/run), reseed, rerun. Or demo tonight with AGENT_PROVIDER=mock.
 
+## Tonight's Complete Run (PROVEN)
+- Full pipeline PUBLISHED over HTTP in mock mode: content cmt91ijuu0001ijf9te0yvljf — approve→PUBLISHED, URL stored, 0 revisions needed
+- Live-mode root cause chain SOLVED: response_format json_schema suppressed Nemotron tool calls (reproduced via direct OpenRouter probe); fix = RESPONSE_FORMAT_SKIP_ROLES=research (default). Exa verified working end-to-end (125 real tool events in one live run)
+- Remaining live blocker ONLY: OpenRouter :free daily quota exhausted from debugging (429 free-models-per-day). Resets next day; or add $10 credits (→1000 req/day); or paid lightning; or switch provider (groq config ready in .env.example)
+
 ## Known Issues / Future Work
 - Live-server smoke against real TrueForge still pending (needs model API key in env): verify json_schema behavior of the chosen endpoint (fallback RESPONSE_FORMAT_MODE=json_object) and MCP catalog contents
 - ESLint via FlatCompat bridge; npm 12 install-scripts approval note in F0 commit
