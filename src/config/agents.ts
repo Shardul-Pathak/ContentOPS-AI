@@ -56,6 +56,16 @@ function modelFqnValue(): string {
 // misreport limits (observed: OpenRouter free tier 400 with 1e12 tokens).
 const MAX_TOKENS_PER_TURN = Number(process.env.MODEL_MAX_OUTPUT_TOKENS ?? 8192);
 
+// Tool-calling agents must NOT get response_format: with a json_schema
+// constraint active, weak providers skip tool calls entirely and emit the
+// final object from memory (reproduced against Nemotron via OpenRouter).
+const RESPONSE_FORMAT_SKIP_ROLES = (
+  process.env.RESPONSE_FORMAT_SKIP_ROLES ?? "research"
+)
+  .split(",")
+  .map((r) => r.trim())
+  .filter(Boolean);
+
 function responseFormat(schema: Parameters<typeof jsonSchemaFor>[0], role: AgentRole): TrueForgeApi.ResponseFormat {
   const mode = responseFormatMode();
   if (mode === "json_schema") {
@@ -238,7 +248,11 @@ export function agentDefinitions(): AgentDefinition[] {
     if (sandboxEnabled && WRITER_SKILLS.length > 0) {
       manifest.skills = WRITER_SKILLS.map((name) => ({ name }));
     }
-    if (schema && responseFormatMode() !== "text") {
+    if (
+      schema &&
+      responseFormatMode() !== "text" &&
+      !RESPONSE_FORMAT_SKIP_ROLES.includes(role)
+    ) {
       manifest.responseFormat = responseFormat(schema, role);
     }
     return { name: AGENT_NAMES[role], manifest };
