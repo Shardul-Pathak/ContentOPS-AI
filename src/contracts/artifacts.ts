@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { parseLooseJson } from "@/lib/json-extract";
+import { sanitizeFor } from "@/lib/contract-sanitize";
 
 // Agent output contracts per AGENTS.md sections 10-15. Every agent's final
 // answer must parse against its schema before anything is persisted or passed
@@ -122,8 +123,13 @@ export type AssetSet = z.infer<typeof assetSetSchema>;
 export function parseQualityReviewOutput(text: string): QualityReview | null {
   const json = parseLooseJson(text);
   if (json == null || typeof json !== "object") return null;
-  const candidate =
+  let candidate: unknown =
     "review" in json ? (json as { review: unknown }).review : json;
+  // Formatting-level normalization (casing, score strings, issue shapes).
+  candidate =
+    candidate != null && typeof candidate === "object"
+      ? sanitizeFor("quality", candidate)
+      : candidate;
   const parsed = qualityReviewSchema.safeParse(candidate);
   return parsed.success ? parsed.data : null;
 }
