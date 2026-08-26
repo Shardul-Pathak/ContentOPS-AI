@@ -7,6 +7,8 @@ import path from "node:path";
 // never a live harness — even when the developer's .env selects trueforge
 // (vitest loads .env files into process.env like Vite does).
 process.env.AGENT_PROVIDER = "mock";
+// Retry backoffs must not slow the suite.
+process.env.RATE_LIMIT_BASE_DELAY_MS = "10";
 
 // Each test file gets its own throwaway SQLite database so tests never touch
 // development data and can run in parallel. Must run before any module imports
