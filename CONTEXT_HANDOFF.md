@@ -35,6 +35,11 @@ See README "Demo walkthrough". Prereqs: .env from example; trueforge mode needs 
 - Live-mode root cause chain SOLVED: response_format json_schema suppressed Nemotron tool calls (reproduced via direct OpenRouter probe); fix = RESPONSE_FORMAT_SKIP_ROLES=research (default). Exa verified working end-to-end (125 real tool events in one live run)
 - Remaining live blocker ONLY: OpenRouter :free daily quota exhausted from debugging (429 free-models-per-day). Resets next day; or add $10 credits (→1000 req/day); or paid lightning; or switch provider (groq config ready in .env.example)
 
+## Rate-Limit Handling (shipped)
+- Working free model found by owner: minimax/minimax-m3:free (only one making tool calls)
+- Transient 429s now auto-retried in-session (20/40/80/160s backoff, RATE_LIMIT_* envs) with rate_limit_retry activity streamed to UI; daily-cap errors fail fast with actionable message; publisher resume path covered too
+- 85/85 tests
+
 ## Known Issues / Future Work
 - Live-server smoke against real TrueForge still pending (needs model API key in env): verify json_schema behavior of the chosen endpoint (fallback RESPONSE_FORMAT_MODE=json_object) and MCP catalog contents
 - ESLint via FlatCompat bridge; npm 12 install-scripts approval note in F0 commit
