@@ -54,7 +54,9 @@ function modelFqnValue(): string {
 
 // Hard cap per agent turn; prevents unbounded max_tokens on endpoints that
 // misreport limits (observed: OpenRouter free tier 400 with 1e12 tokens).
-const MAX_TOKENS_PER_TURN = Number(process.env.MODEL_MAX_OUTPUT_TOKENS ?? 8192);
+// 32k headroom: reasoning models spend completion tokens on internal thinking
+// before emitting the final JSON (observed: "max_tokens breached" at 8k).
+const MAX_TOKENS_PER_TURN = Number(process.env.MODEL_MAX_OUTPUT_TOKENS ?? 32768);
 
 // Tool-calling agents must NOT get response_format: with a json_schema
 // constraint active, weak providers skip tool calls entirely and emit the
