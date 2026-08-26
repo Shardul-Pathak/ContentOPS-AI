@@ -6,6 +6,7 @@ import {
   type PublishResult,
 } from "@/contracts/artifacts";
 import type { Prisma } from "@prisma/client";
+import { coerceUrl } from "@/lib/contract-sanitize";
 import { parseLooseJson } from "@/lib/json-extract";
 import { nextStatus, type WorkflowStatus } from "@/domain/state-machine";
 import { NotFoundError } from "@/services/companies";
@@ -108,8 +109,9 @@ export async function decideApproval(
 
     let parsed: PublishResult | null = null;
     if (result.status === "done" && result.outputText) {
-      const json = parseLooseJson(result.outputText);
+      const json = parseLooseJson(result.outputText) as Record<string, unknown> | null;
       if (json != null) {
+        if (json.publishedUrl != null) json.publishedUrl = coerceUrl(json.publishedUrl);
         const candidate = publishResultSchema.safeParse(json);
         parsed = candidate.success ? candidate.data : null;
       }

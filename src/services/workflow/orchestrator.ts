@@ -18,6 +18,7 @@ import { companyContextInputSchema } from "@/contracts/company-context";
 import { NotFoundError } from "@/services/companies";
 import { MAX_REVISIONS, isTerminal, nextStatus, type WorkflowStatus } from "@/domain/state-machine";
 import { Prisma } from "@prisma/client";
+import { sanitizeFor } from "@/lib/contract-sanitize";
 import { parseLooseJson, truncateForLog } from "@/lib/json-extract";
 import { prisma } from "@/lib/db";
 import {
@@ -68,15 +69,12 @@ interface StageOutcome<T> {
   activity: ActivityItem[];
 }
 
-const validators: Partial<Record<AgentRole, (text: string) => unknown>> = {
-  research: zodOutputParser(researchResultSchema),
-  growth: zodOutputParser(contentStrategySchema),
-  writer: zodOutputParser(articleDraftSchema),
-  // Quality output may arrive enveloped ({ "review": ... }) or bare — the
-  // envelope is required by OpenAI-compatible response_format constraints.
-  quality: parseQualityReviewOutput,
-  image: zodOutputParser(assetSetSchema),
-  publisher: zodOutputParser(publishPayloadSchema),
+const stageSchemas: Partial<Record<AgentRole, ZodLike>> = {
+  research: researchResultSchema,
+  growth: contentStrategySchema,
+  writer: articleDraftSchema,
+  image: assetSetSchema,
+  publisher: publishPayloadSchema,
 };
 
 interface ZodLike {
@@ -85,19 +83,16 @@ interface ZodLike {
     | { success: false; error: unknown };
 }
 
-// Tolerant of markdown fences / surrounding prose before schema validation.
-function zodOutputParser(schema: ZodLike): (text: string) => unknown {
-  return (text) => {
-    const json = parseLooseJson(text);
-    if (json == null) return null;
-    const parsed = schema.safeParse(json);
-    return parsed.success ? parsed.data : null;
-  };
-}
-
+// Full tolerance chain for a stage output:
+//   fences/prose → JSON → formatting normalization → schema.
 function parseArtifact(role: AgentRole, text: string | null): unknown | null {
   if (text == null) return null;
-  return validators[role]?.(text) ?? null;
+  if (role === "quality") return parseQualityReviewOutput(text); // envelope-aware
+  const json = parseLooseJson(text);
+  if (json == null) return null;
+  const cleaned = sanitizeFor(role, json);
+  const parsed = stageSchemas[role]?.safeParse(cleaned);
+  return parsed?.success ? parsed.data : null;
 }
 
 // Top-level key reminders used in corrective prompts, and live zod schemas
@@ -140,13 +135,15 @@ function contractIssues(role: AgentRole, text: string | null): string | null {
   if (text == null || text.trim() === "") return "empty output";
   const json = parseLooseJson(text);
   if (json == null) return "no JSON object could be extracted from the response";
+  // Report issues AFTER normalization so only genuine problems surface.
+  let candidate: unknown =
+    json != null && typeof json === "object" ? sanitizeFor(role, json) : json;
+  // Quality may arrive enveloped ({ review: {...} }) per provider constraints.
+  if (role === "quality" && typeof candidate === "object" && candidate != null && "review" in candidate) {
+    candidate = (candidate as { review: unknown }).review;
+  }
   const schema = contractSchemas[role] as ZodLikeWithIssues | undefined;
   if (!schema) return null;
-  let candidate: unknown = json;
-  // Quality may arrive enveloped ({ review: {...} }) per provider constraints.
-  if (role === "quality" && typeof json === "object" && "review" in json) {
-    candidate = (json as { review: unknown }).review;
-  }
   const parsed = schema.safeParse(candidate);
   if (parsed.success) return null;
   return (parsed as { success: false; error: { issues: { path: (string | number | symbol)[]; message: string }[] } })
