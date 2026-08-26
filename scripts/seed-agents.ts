@@ -127,7 +127,8 @@ async function main() {
               modelId: upstreamModel,
               // Without an explicit cap some OpenRouter-compatible endpoints
               // receive an absurd sentinel max_tokens (1e12) and 400.
-              properties: { maxOutputTokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS ?? 8192) },
+              // 32k: reasoning models burn output tokens on thinking first.
+              properties: { maxOutputTokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS ?? 32768) },
             },
           ],
         },

@@ -282,7 +282,9 @@ async function runStage<A>(
       }
       const detail =
         finalResult.status !== "done"
-          ? (finalResult.errorMessage ?? "harness error")
+          ? /max_tokens/i.test(finalResult.errorMessage ?? "")
+            ? `${finalResult.errorMessage} — the model ran out of output budget. Raise MODEL_MAX_OUTPUT_TOKENS in .env and re-run npm run seed:agents.`
+            : (finalResult.errorMessage ?? "harness error")
           : `output rejected by the ${role} contract (${lastIssues}) — began with: "${truncateForLog(finalResult.outputText ?? "")}"`;
       throw new WorkflowError(`Agent ${role} did not produce a valid result: ${detail}`);
     }
