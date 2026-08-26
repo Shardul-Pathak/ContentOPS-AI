@@ -178,6 +178,40 @@ describe("workflow orchestration (mock runtime)", () => {
     expect(failedRuns.length).toBe(0);
   });
 
+  it("corrects schema drift by naming the missing keys in the retry prompt", async () => {
+    // First research turn: valid JSON, WRONG shape (invented "audience",
+    // dropped four required fields) — exactly what minimax produced live.
+    const drifted = JSON.stringify({
+      topic: "AI infrastructure cost optimization",
+      audience: "Startup founders and engineering leads",
+    });
+    let researchCalls = 0;
+    const runtime = new MockAgentRuntime((role) =>
+      role === "research"
+        ? {
+            overrideOutputText: (_ctx, prompt) => {
+              if (prompt.includes("failed this stage's contract validation")) {
+                // Corrective pass returns the proper fixture.
+                return null; // fall through to fixture
+              }
+              researchCalls += 1;
+              return "```json\n" + drifted + "\n```";
+            },
+          }
+        : {},
+    );
+
+    const contentId = await startTestContent("Schema drift topic");
+    const content = await runToCompletion(contentId, runtime);
+    expect(content.status).toBe("AWAITING_APPROVAL");
+
+    const writerPrompts = runtime.recordedPrompts.filter((p) => p.role === "research");
+    const corrective = writerPrompts.find((p) => p.content.includes("contract validation"));
+    expect(corrective).toBeDefined();
+    expect(corrective!.content).toContain("searchIntent");
+    expect(corrective!.content).toContain("audienceQuestions");
+  });
+
   it("reports a friendly error (not a raw parser message) when output stays invalid", async () => {
     const runtime = new MockAgentRuntime((role) =>
       role === "research"
@@ -193,7 +227,8 @@ describe("workflow orchestration (mock runtime)", () => {
     }
     const after = await prisma.content.findUniqueOrThrow({ where: { id: contentId } });
     expect(after.status).toBe("FAILED");
-    expect(after.failureReason).toContain("was not valid JSON for the research contract after one corrective retry");
+    expect(after.failureReason).toContain("rejected by the research contract");
+    expect(after.failureReason).toContain("no JSON object could be extracted");
     expect(after.failureReason).not.toContain("position 2");
   });
 

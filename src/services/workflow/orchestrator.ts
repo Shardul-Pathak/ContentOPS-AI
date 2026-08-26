@@ -100,6 +100,61 @@ function parseArtifact(role: AgentRole, text: string | null): unknown | null {
   return validators[role]?.(text) ?? null;
 }
 
+// Top-level key reminders used in corrective prompts, and live zod schemas
+// used to describe EXACTLY what a rejected output was missing.
+const contractSchemas: Partial<Record<AgentRole, ZodLike>> = {
+  research: researchResultSchema,
+  growth: contentStrategySchema,
+  writer: articleDraftSchema,
+  quality: qualityReviewSchema,
+  image: assetSetSchema,
+  publisher: publishPayloadSchema,
+};
+
+const CONTRACT_KEYS: Record<AgentRole, string> = {
+  research:
+    "topic, searchIntent, audienceQuestions[], painPoints[], keyPoints[], sources[{title,url,publisher,relevance,claimsSupported[]}], contentOpportunities[], limitations[]",
+  growth:
+    "primaryTopic, searchIntent, targetQuestions[], primaryKeywords[], secondaryTopics[], contentAngle, productPositioning, ctaStrategy, recommendedStructure[], contentGaps[]",
+  writer:
+    "title, slug(kebab-case), metaTitle, metaDescription, content(>=200 chars), headings[], cta, sources[]",
+  quality:
+    '{ status:"PASS"|"FAIL", score(0-100), recommendations[] }; FAIL requires issues[{severity,category,description,location,suggestedFix}]',
+  image:
+    '{ assets:[{type:"hero"|"inline", url, altText, description}] }',
+  publisher:
+    "{ destination, title, slug, metaDescription, assetCount, externalAction }",
+};
+
+interface ZodLikeWithIssues {
+  safeParse(input: unknown):
+    | { success: true; data: unknown }
+    | { success: false; error: { issues: { path: (string | number | symbol)[]; message: string }[] } };
+}
+
+/**
+ * Human-readable contract violations for a stage output, or null when valid.
+ * Tolerates markdown fences / prose via the shared loose parser.
+ */
+function contractIssues(role: AgentRole, text: string | null): string | null {
+  if (text == null || text.trim() === "") return "empty output";
+  const json = parseLooseJson(text);
+  if (json == null) return "no JSON object could be extracted from the response";
+  const schema = contractSchemas[role] as ZodLikeWithIssues | undefined;
+  if (!schema) return null;
+  let candidate: unknown = json;
+  // Quality may arrive enveloped ({ review: {...} }) per provider constraints.
+  if (role === "quality" && typeof json === "object" && "review" in json) {
+    candidate = (json as { review: unknown }).review;
+  }
+  const parsed = schema.safeParse(candidate);
+  if (parsed.success) return null;
+  return (parsed as { success: false; error: { issues: { path: (string | number | symbol)[]; message: string }[] } })
+    .error.issues.slice(0, 8)
+    .map((i) => `${i.path.map(String).join(".") || "(root)"}: ${i.message}`)
+    .join("; ");
+}
+
 // Transient-429 handling: free OpenRouter tiers cap requests per minute and a
 // research turn easily exceeds that. Retry the SAME session after a wait —
 // prior tool results stay in session context, so the agent resumes cleanly.
@@ -170,38 +225,65 @@ async function runStage<A>(
     }
   };
 
+  // Session refs survive failures so runs stay auditable in TrueForge.
+  let usedSessionId: string | undefined;
+  let usedTurnId: string | undefined;
+  let usedSequenceNumber = 0;
+
   try {
     const sessionId = await runtime.createSessionId(role);
+    usedSessionId = sessionId;
     const continuePrompt =
       "You were interrupted by a temporary provider rate limit. Continue your task exactly where you left off.";
-    let result = await invokeTurnWithRateLimitRetry(
-      () => runtime.runUserMessage(sessionId, prompt, onActivity),
-      () => runtime.runUserMessage(sessionId, continuePrompt, onActivity),
-      onActivity,
-    );
 
-    // One corrective retry when the model returns unparseable output
-    // (AGENTS.md section 23: retry only when safe).
-    if (result.status === "done" && parseArtifact(role, result.outputText) == null) {
-      result = await runtime.runUserMessage(
-        sessionId,
-        "Your previous response was not valid JSON for the required schema. Respond again with ONLY the JSON object.",
+    // Up to two passes: initial turn, then one corrective turn that names the
+    // exact contract violations from the first attempt (AGENTS.md section 23).
+    let result: TurnResult | undefined;
+    let lastIssues: string | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const content =
+        attempt === 0
+          ? prompt
+          : [
+              "Your previous response failed this stage's contract validation:",
+              lastIssues,
+              "",
+              `Respond again with ONLY one JSON object containing exactly these top-level keys and shapes:`,
+              CONTRACT_KEYS[role],
+              "Reuse the information you already gathered in this conversation — do not search or start over.",
+            ]
+              .filter(Boolean)
+              .join("\n");
+
+      result = await invokeTurnWithRateLimitRetry(
+        () => runtime.runUserMessage(sessionId, content, onActivity),
+        () => runtime.runUserMessage(sessionId, continuePrompt, onActivity),
+        onActivity,
       );
-    }
 
+      usedTurnId = result.turnId ?? usedTurnId;
+      usedSequenceNumber = Math.max(usedSequenceNumber, result.lastSequenceNumber);
+
+      if (result.status !== "done") break;
+      lastIssues = contractIssues(role, result.outputText);
+      if (lastIssues == null) break; // valid — done
+    }
+    if (!result) throw new WorkflowError(`${role} stage never executed a turn`);
+
+    const finalResult = result;
     const artifact =
-      result.status === "done" ? (parseArtifact(role, result.outputText) as A | null) : null;
+      finalResult.status === "done" ? (parseArtifact(role, finalResult.outputText) as A | null) : null;
 
     if (!artifact) {
-      if (result.dailyQuotaExhausted) {
+      if (finalResult.dailyQuotaExhausted) {
         throw new WorkflowError(
           `Provider daily free quota exhausted mid-${role}. Add credits on the provider dashboard or switch MODEL_UPSTREAM_MODEL.`,
         );
       }
       const detail =
-        result.status !== "done"
-          ? (result.errorMessage ?? "harness error")
-          : `output was not valid JSON for the ${role} contract after one corrective retry — began with: "${truncateForLog(result.outputText ?? "")}"`;
+        finalResult.status !== "done"
+          ? (finalResult.errorMessage ?? "harness error")
+          : `output rejected by the ${role} contract (${lastIssues}) — began with: "${truncateForLog(finalResult.outputText ?? "")}"`;
       throw new WorkflowError(`Agent ${role} did not produce a valid result: ${detail}`);
     }
 
@@ -221,12 +303,12 @@ async function runStage<A>(
       where: { id: run.id },
       data: {
         status: "DONE",
-        trueforgeSessionId: sessionId,
-        trueforgeTurnId: result.turnId,
-        lastSequenceNumber: result.lastSequenceNumber,
+        trueforgeSessionId: usedSessionId,
+        trueforgeTurnId: finalResult.turnId,
+        lastSequenceNumber: finalResult.lastSequenceNumber,
         activity: asJson(finalActivity),
         output: asJson(artifact),
-        metrics: result.metrics ? asJson(result.metrics) : undefined,
+        metrics: finalResult.metrics ? asJson(finalResult.metrics) : undefined,
         finishedAt: new Date(),
       },
     });
