@@ -29,6 +29,10 @@ export interface TurnResult {
   status: "done" | "cancelled" | "error";
   outputText: string | null;
   errorMessage?: string;
+  /** Provider rejected the request with HTTP 429 — safe to retry after a wait. */
+  rateLimited?: boolean;
+  /** The DAILY free-model quota is gone — retrying soon cannot succeed. */
+  dailyQuotaExhausted?: boolean;
   pendingApprovals: PendingApproval[];
   activity: ActivityItem[];
   metrics?: TurnMetrics;
@@ -140,9 +144,8 @@ export class TrueForgeRuntime implements AgentRuntime {
       }
     }
 
-    return (
-      done ?? { status: "error", outputText: null, errorMessage: "stream ended without turn.done", pendingApprovals: [], activity, sessionId, turnId, lastSequenceNumber }
-    );
+    const final = done ?? { status: "error" as const, outputText: null, errorMessage: "stream ended without turn.done", pendingApprovals: [] as PendingApproval[], activity, sessionId, turnId, lastSequenceNumber };
+    return tagRateLimits(final);
   }
 
   async resumeAfterApproval(sessionId: string, decisions: ResumeDecision[]): Promise<TurnResult> {
@@ -195,10 +198,21 @@ export class TrueForgeRuntime implements AgentRuntime {
       }
     }
 
-    return (
-      done ?? { status: "error", outputText: null, errorMessage: "resume stream ended without turn.done", pendingApprovals: [], activity, sessionId, turnId, lastSequenceNumber }
-    );
+    const final = done ?? { status: "error" as const, outputText: null, errorMessage: "resume stream ended without turn.done", pendingApprovals: [] as PendingApproval[], activity, sessionId, turnId, lastSequenceNumber };
+    return tagRateLimits(final);
   }
+}
+
+/** Annotates error results with retryability flags based on the message. */
+function tagRateLimits<T extends { status: string; errorMessage?: string }>(
+  result: T,
+): T & { rateLimited?: boolean; dailyQuotaExhausted?: boolean } {
+  if (result.status !== "error") return result;
+  return {
+    ...result,
+    rateLimited: isTransientRateLimit(result.errorMessage),
+    dailyQuotaExhausted: isDailyQuotaExhausted(result.errorMessage),
+  };
 }
 
 function mainThreadFinal(
@@ -271,6 +285,18 @@ function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n)}…`;
 }
 
+/** True when a provider/harness error is a transient per-minute rate limit. */
+export function isTransientRateLimit(message: string | undefined): boolean {
+  if (!message) return false;
+  return /\b429\b|rate limit exceeded|rate_limit/i.test(message);
+}
+
+/** True when the DAILY free-tier allowance is gone (waiting minutes won't help). */
+export function isDailyQuotaExhausted(message: string | undefined): boolean {
+  if (!message) return false;
+  return /free-models-per-day|models-per-day|daily.*(quota|limit)|quota.*daily/i.test(message);
+}
+
 // --- Mock implementation -----------------------------------------------------
 
 export interface MockInvocationContext {
@@ -290,6 +316,10 @@ export interface MockScriptEntry {
   failResume?: boolean;
   /** Emit no tool activity — used to test the fabricated-citation gate. */
   suppressActivity?: boolean;
+  /** These per-session call indexes fail with a transient 429 instead. */
+  rateLimitCallIndexes?: number[];
+  /** These per-session call indexes fail with the DAILY quota error. */
+  dailyQuotaCallIndexes?: number[];
 }
 
 export class MockAgentRuntime implements AgentRuntime {
@@ -353,6 +383,31 @@ export class MockAgentRuntime implements AgentRuntime {
       };
     }
 
+    if (script.dailyQuotaCallIndexes?.includes(callIndex)) {
+      return tagRateLimits({
+        status: "error" as const,
+        outputText: null,
+        errorMessage:
+          "Request failed (429): Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day",
+        pendingApprovals: [],
+        activity: [],
+        sessionId,
+        turnId: `${sessionId}-turn-${callIndex}`,
+        lastSequenceNumber: 1,
+      });
+    }
+    if (script.rateLimitCallIndexes?.includes(callIndex)) {
+      return tagRateLimits({
+        status: "error" as const,
+        outputText: null,
+        errorMessage: `Request failed (429): Rate limit exceeded (mock, ${role})`,
+        pendingApprovals: [],
+        activity: [],
+        sessionId,
+        turnId: `${sessionId}-turn-${callIndex}`,
+        lastSequenceNumber: 1,
+      });
+    }
     if (script.failCallIndexes?.includes(callIndex) || script.failSessionOrdinals?.includes(sessionOrdinal)) {
       emit({ type: "error", detail: `simulated ${role} failure` });
       return {

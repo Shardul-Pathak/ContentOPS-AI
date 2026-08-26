@@ -9,7 +9,7 @@ import type { Prisma } from "@prisma/client";
 import { parseLooseJson } from "@/lib/json-extract";
 import { nextStatus, type WorkflowStatus } from "@/domain/state-machine";
 import { NotFoundError } from "@/services/companies";
-import { getAgentRuntime } from "@/services/workflow/orchestrator";
+import { getAgentRuntime, invokeTurnWithRateLimitRetry } from "@/services/workflow/orchestrator";
 import type { AgentRuntime } from "@/lib/agent-runtime";
 
 // Human approval gate (AGENTS.md sections 4.4/17). The decision is a control
@@ -92,13 +92,19 @@ export async function decideApproval(
 
   try {
     const runtime = runtimeOverride ?? getAgentRuntime();
-    const result = await runtime.resumeAfterApproval(approval.tfSessionId, [
+    // The gate stays pending until approvals are delivered — resending the
+    // SAME decision is the correct 429-retry for a paused turn.
+    const resumeDecisions = [
       {
         threadId: approval.threadId ?? "main",
         toolCallId: approval.toolCallId,
         allow: true,
       },
-    ]);
+    ];
+    const result = await invokeTurnWithRateLimitRetry(
+      () => runtime.resumeAfterApproval(approval.tfSessionId!, resumeDecisions),
+      () => runtime.resumeAfterApproval(approval.tfSessionId!, resumeDecisions),
+    );
 
     let parsed: PublishResult | null = null;
     if (result.status === "done" && result.outputText) {

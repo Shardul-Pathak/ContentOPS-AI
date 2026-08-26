@@ -26,6 +26,7 @@ import {
   type ActivityItem,
   type ActivitySink,
   type AgentRuntime,
+  type TurnResult,
 } from "@/lib/agent-runtime";
 
 // Application-side orchestration per AGENTS.md sections 6/9/14: business
@@ -99,6 +100,40 @@ function parseArtifact(role: AgentRole, text: string | null): unknown | null {
   return validators[role]?.(text) ?? null;
 }
 
+// Transient-429 handling: free OpenRouter tiers cap requests per minute and a
+// research turn easily exceeds that. Retry the SAME session after a wait —
+// prior tool results stay in session context, so the agent resumes cleanly.
+const RATE_LIMIT_MAX_RETRIES = Number(process.env.RATE_LIMIT_MAX_RETRIES ?? 4);
+const RATE_LIMIT_BASE_DELAY_MS = () =>
+  Number(process.env.RATE_LIMIT_BASE_DELAY_MS ?? 20000);
+
+function rateLimitDelayMs(attempt: number): number {
+  // 20s, 40s, 80s, 160s …
+  return RATE_LIMIT_BASE_DELAY_MS() * Math.pow(2, attempt);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function invokeTurnWithRateLimitRetry(
+  invokeInitial: () => Promise<TurnResult>,
+  invokeRetry: () => Promise<TurnResult>,
+  onActivity?: (item: ActivityItem) => void,
+): Promise<TurnResult> {
+  let result = await invokeInitial();
+  let attempt = 0;
+  while (result.status === "error" && result.rateLimited && !result.dailyQuotaExhausted && attempt < RATE_LIMIT_MAX_RETRIES) {
+    const delay = rateLimitDelayMs(attempt);
+    attempt++;
+    onActivity?.({
+      type: "rate_limit_retry",
+      detail: `429 received — waiting ${Math.round(delay / 1000)}s before continuing (attempt ${attempt}/${RATE_LIMIT_MAX_RETRIES})`,
+    });
+    await sleep(delay);
+    result = await invokeRetry();
+  }
+  return result;
+}
+
 async function runStage<A>(
   ctx: StageContext,
   role: AgentRole,
@@ -137,7 +172,13 @@ async function runStage<A>(
 
   try {
     const sessionId = await runtime.createSessionId(role);
-    let result = await runtime.runUserMessage(sessionId, prompt, onActivity);
+    const continuePrompt =
+      "You were interrupted by a temporary provider rate limit. Continue your task exactly where you left off.";
+    let result = await invokeTurnWithRateLimitRetry(
+      () => runtime.runUserMessage(sessionId, prompt, onActivity),
+      () => runtime.runUserMessage(sessionId, continuePrompt, onActivity),
+      onActivity,
+    );
 
     // One corrective retry when the model returns unparseable output
     // (AGENTS.md section 23: retry only when safe).
@@ -152,12 +193,29 @@ async function runStage<A>(
       result.status === "done" ? (parseArtifact(role, result.outputText) as A | null) : null;
 
     if (!artifact) {
+      if (result.dailyQuotaExhausted) {
+        throw new WorkflowError(
+          `Provider daily free quota exhausted mid-${role}. Add credits on the provider dashboard or switch MODEL_UPSTREAM_MODEL.`,
+        );
+      }
       const detail =
         result.status !== "done"
           ? (result.errorMessage ?? "harness error")
           : `output was not valid JSON for the ${role} contract after one corrective retry — began with: "${truncateForLog(result.outputText ?? "")}"`;
       throw new WorkflowError(`Agent ${role} did not produce a valid result: ${detail}`);
     }
+
+    // Merge streamed live activity (incl. retry markers) with the turn's own
+    // final list; sink items are a superset for both runtimes.
+    const finalActivity =
+      liveActivity.length > 0
+        ? [
+            ...liveActivity,
+            ...result.activity.filter(
+              (a) => !liveActivity.some((b) => b.type === a.type && b.detail === a.detail),
+            ),
+          ]
+        : result.activity;
 
     await prisma.agentRun.update({
       where: { id: run.id },
@@ -166,7 +224,7 @@ async function runStage<A>(
         trueforgeSessionId: sessionId,
         trueforgeTurnId: result.turnId,
         lastSequenceNumber: result.lastSequenceNumber,
-        activity: asJson(result.activity),
+        activity: asJson(finalActivity),
         output: asJson(artifact),
         metrics: result.metrics ? asJson(result.metrics) : undefined,
         finishedAt: new Date(),
