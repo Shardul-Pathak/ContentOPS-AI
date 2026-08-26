@@ -114,6 +114,36 @@ async function main() {
         ],
       );
     }
+
+    // Context window: prefer an explicit env value, then auto-resolve from the
+    // OpenRouter catalog (exact upstream id), else omit and let TF default.
+    let contextLength: number | undefined;
+    if (process.env.MODEL_CONTEXT_LENGTH) {
+      contextLength = Number(process.env.MODEL_CONTEXT_LENGTH);
+    } else if (/openrouter\.ai/i.test(providerBaseUrl)) {
+      // The single-model endpoint 404s for some ":free" slugs — fall back to
+      // the full catalog listing.
+      const fromModel = (m?: { context_length?: number }) =>
+        Number.isFinite(m?.context_length) ? m?.context_length : undefined;
+      try {
+        const res = await fetch(`${providerBaseUrl}/models/${upstreamModel}`);
+        const body = (await res.json()) as { data?: { context_length?: number } };
+        contextLength = fromModel(body.data);
+      } catch {
+        /* try full catalog below */
+      }
+      if (contextLength == null) {
+        try {
+          const res = await fetch(`${providerBaseUrl}/models`);
+          const body = (await res.json()) as { data?: { id: string; context_length?: number }[] };
+          const match = body.data?.find((m) => m.id === upstreamModel);
+          contextLength = fromModel(match);
+        } catch {
+          /* omit property; TF applies its own default */
+        }
+      }
+    }
+
     try {
       await client.settings.modelProviders.createOrUpdate({
         manifest: {
@@ -128,13 +158,16 @@ async function main() {
               // Without an explicit cap some OpenRouter-compatible endpoints
               // receive an absurd sentinel max_tokens (1e12) and 400.
               // 32k: reasoning models burn output tokens on thinking first.
-              properties: { maxOutputTokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS ?? 32768) },
+              properties: {
+                maxOutputTokens: Number(process.env.MODEL_MAX_OUTPUT_TOKENS ?? 32768),
+                ...(contextLength != null ? { contextLength } : {}),
+              },
             },
           ],
         },
       });
       console.log(
-        `✓ model provider "${providerName}" upserted (upstream: ${upstreamModel} → registry FQN: ${modelFqn})`,
+        `✓ model provider "${providerName}" upserted (upstream: ${upstreamModel} → FQN: ${modelFqn}${contextLength ? `, context: ${contextLength}` : ""})`,
       );
     } catch (err) {
       const { status, detail } = describeError(err);
